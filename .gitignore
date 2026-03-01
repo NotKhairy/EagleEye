@@ -1,0 +1,34 @@
+### Python environments
+venv/
+.venv/
+env/
+
+### Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+### IDE / editor
+.vscode/
+.idea/
+
+### OS files
+.DS_Store
+Thumbs.db
+
+### Secrets / local config
+.env
+.env.*
+
+### Logs
+*.log
+
+### Optional: local generated media and heavy model weights
+# Uncomment if you do NOT want these in git:
+# videos/
+# *.pt
