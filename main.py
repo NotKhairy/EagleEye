@@ -1,51 +1,87 @@
-from ultralytics import YOLO
 import cv2
-import time
-
-model = YOLO("yolov8n.pt")
-cap = cv2.VideoCapture(0) #0 is webcam
-
-zone = (100, 100, 400, 400)
+from detection.detector import ObjectDetector
+from detection.zone_logic import ZoneManager
 
 
-def in_zone(xy, zone):
-    x, y = xy
-    x1, y1, x2, y2 = zone
-    return x1 <= x <= x2 and y1 <= y <= y2
+# Process detection every Nth frame (1 = every frame, 2 = every other frame).
+FRAME_SKIP = 2
 
-def getBoxCenter(box):
-    x = (box[0] + box[2]) / 2
-    y = (box[1] + box[3]) / 2
-    return x, y 
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("Failed to grab frame")
-        break
+def main():
+    """Main application loop"""
+    # Initialize components
+    detector = ObjectDetector(model_path="yolov8n.pt", confidence=0.3)
+    zone_manager = ZoneManager(config_path="config/zone_config.json")
+    cap = cv2.VideoCapture("videos/guyParkingCar.mp4")  # 0 is webcam
 
-    # Use tracking instead of detection - smooths out boxes across frames
-    results = model.track(frame, persist=True, verbose=False, conf=0.5)
-    annotated_frame = results[0].plot()
-    human_in_zone = False
-
+    if not cap.isOpened():
+        print("Could not open video source")
+        return
     
-    if len(results[0].boxes) > 0:
-        for i, box in enumerate(results[0].boxes.xyxy):
-            cls = int(results[0].boxes.cls[i])
-            if cls == 0:  # Person class
-                boxCenter = getBoxCenter(box)
-                if in_zone(boxCenter, zone):
-                    human_in_zone = True
-                    break
+    # Setup window and mouse callback
+    window_name = "EagleEye Detection"
+    cv2.namedWindow(window_name)
+    cv2.setMouseCallback(window_name, zone_manager.mouse_callback)
     
+    print("EagleEye started. Left-click points to draw polygon, click first point again to close. Press Esc to cancel draft polygon.")
 
-    color = (0, 0, 255) if human_in_zone else (0, 255, 0)
-    cv2.rectangle(annotated_frame, (100, 100), (400, 400), color, 2)
-    cv2.imshow("Detection", annotated_frame)
+    frame_index = 0
+    tracked_objects = []
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("End of video or failed to grab frame")
+            break
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+        frame_index += 1
+        
+        # Perform detection/tracking
+        if frame_index % FRAME_SKIP == 0:
+            tracked_objects = detector.track(frame)
+        annotated_frame = detector.draw_tracks(frame, tracked_objects, font_scale=0.4, line_width=1)
+        
+        # Check if matching objects are in any zones
+        any_zone_triggered = detector.check_objects_in_zones(tracked_objects, zone_manager)
+        
+        # Draw all zones on frame
+        zone_manager.draw_zones(annotated_frame)
+        
+        # Add UI elements
+        draw_ui(annotated_frame, zone_manager, any_zone_triggered)
+        
+        # Display frame
+        cv2.imshow(window_name, annotated_frame)
+        
+        # Handle keyboard input
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
+            break
+        elif key == 27:  # Esc
+            zone_manager.cancel_current_polygon()
+        elif key == ord("c"):
+            zone_manager.clear_all_zones()
+            print("All zones cleared")
+    
+    # Cleanup
+    cap.release()
+    cv2.destroyAllWindows()
 
-cap.release()
-cv2.destroyAllWindows()
+
+def draw_ui(frame, zone_manager, any_zone_triggered):
+    """Draw UI elements on frame"""
+    # Instructions
+    instructions = "Left-click: Add point/close polygon | Esc: Cancel draft | Right-click: Delete | 'c': Clear all | 'q': Quit"
+    cv2.putText(frame, instructions, (10, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    
+    # Status information
+    zone_count = len(zone_manager.zones)
+    triggered_count = sum(1 for z in zone_manager.zones if z["triggered"])
+    status = f"Zones: {zone_count} | Triggered: {triggered_count}"
+    cv2.putText(frame, status, (10, 60), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+
+if __name__ == "__main__":
+    main()

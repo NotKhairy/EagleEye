@@ -2,3 +2,7 @@ ultralytics
 opencv-python
 numpy
 matplotlib
+deep-sort-realtime
+torch
+torchvision
+torchaudio

@@ -1,0 +1,27 @@
+[
+    {
+        "zone_name": "Zone 1",
+        "zone_id": 1,
+        "description": "Detection zone",
+        "trigger": "car",
+        "coordinates": [
+            [
+                382,
+                581
+            ],
+            [
+                478,
+                548
+            ],
+            [
+                389,
+                512
+            ],
+            [
+                290,
+                546
+            ]
+        ],
+        "onTrigger": "Incrementing car count"
+    }
+]

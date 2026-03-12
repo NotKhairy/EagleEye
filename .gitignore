@@ -32,3 +32,5 @@ Thumbs.db
 # Uncomment if you do NOT want these in git:
 # videos/
 # *.pt
+
+/videos/
