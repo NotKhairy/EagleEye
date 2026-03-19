@@ -6,3 +6,7 @@ deep-sort-realtime
 torch
 torchvision
 torchaudio
+fastapi
+uvicorn
+pydantic
+python-multipart

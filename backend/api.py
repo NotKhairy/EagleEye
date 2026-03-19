@@ -1,0 +1,295 @@
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import List, Optional
+import json
+import os
+import threading
+import time
+import cv2
+from main import (
+    close_runtime,
+    create_runtime,
+    get_runtime_status,
+    process_next_frame,
+    run_loop_in_thread,
+)
+
+app = FastAPI()
+
+DEFAULT_GLOBAL_CONFIG = "config/global_config.json"
+
+runtime = None
+worker_thread = None
+stop_event = threading.Event()
+runtime_lock = threading.Lock()
+
+@app.get("/")
+def root():
+    return {"message": "EagleEye backend running"}
+
+
+@app.get("/video_feed")
+def video_feed():
+    target_fps = 15
+    frame_interval = 1.0 / target_fps
+
+    def generate():
+        while True:
+            frame = None
+            with runtime_lock:
+                if runtime is not None and runtime.latest_annotated_frame is not None:
+                    frame = runtime.latest_annotated_frame.copy()
+
+            if frame is None:
+                time.sleep(0.05)
+                continue
+
+            ok, buffer = cv2.imencode(".jpg", frame)
+            if not ok:
+                time.sleep(0.01)
+                continue
+
+            jpg = buffer.tobytes()
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
+            )
+            time.sleep(frame_interval)
+
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+class ActionPayload(BaseModel):
+    desktopPush: bool
+    emailDigest: Optional[str] = None
+    saveSnapshotLocally: bool
+    SMS: Optional[str] = None
+    Call: Optional[str] = None
+
+
+class GlobalConfigPayload(BaseModel):
+    frameSkip: int
+    confidenceThreshold: float
+    Action: ActionPayload
+
+
+@app.post("/global_config")
+def global_config(payload: GlobalConfigPayload):
+    os.makedirs(os.path.dirname(DEFAULT_GLOBAL_CONFIG), exist_ok=True)
+    with open(DEFAULT_GLOBAL_CONFIG, "w") as f:
+        json.dump([payload.model_dump()], f, indent=4)
+
+    return {"status": "saved", "path": DEFAULT_GLOBAL_CONFIG}
+
+@app.post("/zone_config")
+def zone_config():
+    global runtime
+    with runtime_lock:
+        if runtime is None:
+            return {"status": "not initialized"}
+        runtime.zone_manager.load_zones()
+        return {"status": "zones loaded", "zone_count": len(runtime.zone_manager.zones)}
+
+
+@app.post("/initialize")
+def initialize(
+    model_path: str = "yolov8n.pt",
+    confidence: float = 0.3,
+    zone_config_path: str = "config/zone_config.json",
+    video_source: str = "videos/guyParkingCar.mp4",
+    frame_skip: int = 2,
+    show_window: bool = False,
+):
+    global runtime, worker_thread, stop_event
+    with runtime_lock:
+        if worker_thread is not None and worker_thread.is_alive():
+            return {"status": "already running", "message": "Stop the loop before re-initializing"}
+
+        if runtime is not None:
+            close_runtime(runtime)
+            runtime = None
+
+        stop_event = threading.Event()
+        runtime = create_runtime(
+            model_path=model_path,
+            confidence=confidence,
+            zone_config_path=zone_config_path,
+            video_source=video_source,
+            frame_skip=frame_skip,
+            show_window=show_window,
+        )
+        if runtime is None:
+            return {"status": "error", "message": "Could not initialize video source"}
+
+        return {"status": "initialized", "runtime": get_runtime_status(runtime)}
+
+@app.post("/start")
+def start():
+    global runtime, worker_thread, stop_event
+    with runtime_lock:
+        if worker_thread is not None and worker_thread.is_alive():
+            return {"status": "already running"}
+
+        if runtime is None:
+            runtime = create_runtime(show_window=False)
+            if runtime is None:
+                runtime = create_runtime(video_source="0", show_window=False)
+            if runtime is None:
+                return {"status": "error", "message": "Could not initialize video source (file and webcam fallback failed)"}
+
+        stop_event.clear()
+        worker_thread = threading.Thread(
+            target=run_loop_in_thread,
+            args=(runtime, stop_event),
+            daemon=True,
+        )
+        worker_thread.start()
+        return {"status": "started"}
+
+
+@app.post("/step")
+def step():
+    global runtime, worker_thread
+    with runtime_lock:
+        if worker_thread is not None and worker_thread.is_alive():
+            return {"status": "error", "message": "Cannot step while loop is running"}
+
+        if runtime is None:
+            runtime = create_runtime(show_window=False)
+            if runtime is None:
+                runtime = create_runtime(video_source="0", show_window=False)
+            if runtime is None:
+                return {"status": "error", "message": "Could not initialize video source (file and webcam fallback failed)"}
+
+        can_continue = process_next_frame(runtime)
+        return {
+            "status": "ok" if can_continue else "ended",
+            "runtime": get_runtime_status(runtime),
+        }
+
+@app.post("/stop")
+def stop():
+    global runtime, worker_thread, stop_event
+    with runtime_lock:
+        if worker_thread is None or not worker_thread.is_alive():
+            if runtime is not None:
+                close_runtime(runtime)
+                runtime = None
+            return {"status": "not running"}
+
+        stop_event.set()
+        worker_thread.join(timeout=2)
+        worker_thread = None
+        runtime = None
+        return {"status": "stopped"}
+
+
+@app.post("/clear_zones")
+def clear_zones():
+    global runtime
+    with runtime_lock:
+        if runtime is None:
+            return {"status": "not initialized"}
+        runtime.zone_manager.clear_all_zones()
+        return {"status": "zones cleared"}
+
+
+@app.get("/status")
+def status():
+    global runtime, worker_thread
+    with runtime_lock:
+        return {
+            "initialized": runtime is not None,
+            "running": worker_thread is not None and worker_thread.is_alive(),
+            "runtime": get_runtime_status(runtime) if runtime is not None else None,
+        }
+
+
+# ---------- Zone management ----------
+
+class ZonePayload(BaseModel):
+    zone_id: str
+    zone_name: str
+    description: str = "Detection zone"
+    trigger: str = "person"
+    coordinates: List[List[float]]
+    rule: str = "dwell"
+    severity: str = "info"
+
+
+DEFAULT_ZONE_CONFIG = "config/zone_config.json"
+
+
+def _zone_config_path() -> str:
+    global runtime
+    if runtime is not None:
+        return runtime.zone_manager.config_path
+    return DEFAULT_ZONE_CONFIG
+
+
+@app.post("/zones")
+def add_zone(payload: ZonePayload):
+    global runtime
+    config_path = _zone_config_path()
+
+    # Load existing zones from JSON
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            try:
+                zones = json.load(f)
+            except json.JSONDecodeError:
+                zones = []
+    else:
+        zones = []
+
+    # Remove any zone with the same id (upsert)
+    zones = [z for z in zones if str(z.get("zone_id", "")) != str(payload.zone_id)]
+
+    zones.append({
+        "zone_name": payload.zone_name,
+        "zone_id": payload.zone_id,
+        "description": payload.description,
+        "trigger": payload.trigger,
+        "coordinates": payload.coordinates,
+        "rule": payload.rule,
+        "severity": payload.severity,
+    })
+
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    with open(config_path, "w") as f:
+        json.dump(zones, f, indent=4)
+
+    # Hot-reload into running runtime if available
+    with runtime_lock:
+        if runtime is not None:
+            runtime.zone_manager.load_zones()
+
+    return {"status": "saved", "zone_id": payload.zone_id}
+
+
+@app.delete("/zones/{zone_id}")
+def remove_zone(zone_id: str):
+    config_path = _zone_config_path()
+
+    if not os.path.exists(config_path):
+        return {"status": "not_found"}
+
+    with open(config_path, "r") as f:
+        try:
+            zones = json.load(f)
+        except json.JSONDecodeError:
+            zones = []
+
+    updated = [z for z in zones if str(z.get("zone_id", "")) != zone_id]
+
+    with open(config_path, "w") as f:
+        json.dump(updated, f, indent=4)
+
+    with runtime_lock:
+        if runtime is not None:
+            runtime.zone_manager.load_zones()
+
+    return {"status": "deleted", "zone_id": zone_id}

@@ -1,0 +1,27 @@
+{
+  "name": "eagleeye",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "kill": "powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }\"",
+    "dev": "npm run kill && concurrently -k -n FRONTEND,BACKEND -c blue,green \"npm run frontend\" \"npm run backend\"",
+    "frontend": "cd frontend && npm run dev",
+    "backend": "cd backend && uvicorn api:app --reload --host 127.0.0.1 --port 8000"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NotKhairy/EagleEye.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/NotKhairy/EagleEye/issues"
+  },
+  "homepage": "https://github.com/NotKhairy/EagleEye#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

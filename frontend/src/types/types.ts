@@ -1,0 +1,146 @@
+// src/types/types.ts
+
+/* =========================
+   Video Source
+========================= */
+
+export type VideoSourceType = "camera" | "video_file";
+
+export interface VideoSource {
+  type: VideoSourceType;
+  deviceId?: string;
+  filePath?: string;
+  name?: string;
+}
+
+
+/* =========================
+   Detection Settings
+========================= */
+
+export interface DetectionSettings {
+  frameSkip: number;
+  confidenceThreshold: number;
+  selectedObjects: ObjectClass[];
+}
+
+
+/* =========================
+   Object Classes
+========================= */
+
+export type ObjectClass =
+  | "person"
+  | "car"
+  | "bicycle"
+  | "motorcycle"
+  | "bus"
+  | "truck"
+  | "package";
+
+
+/* =========================
+   Geometry
+========================= */
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export type Polygon = Point[];
+
+
+/* =========================
+   Zones
+========================= */
+
+export interface Zone {
+  id: string;
+  name: string;
+  polygon: Polygon;
+  color: string;
+  rule: ZoneRule;
+}
+
+
+/* =========================
+   Zone Rules
+========================= */
+
+export type ZoneTriggerType =
+  | "enter"
+  | "exit"
+  | "dwell";
+
+export interface ZoneRule {
+  trigger: ZoneTriggerType;
+  objectClass: ObjectClass | "any";
+  dwellTime?: number;
+  severity: AlertSeverity;
+}
+
+
+/* =========================
+   Alert Severity
+========================= */
+
+export type AlertSeverity =
+  | "info"
+  | "warn"
+  | "critical";
+
+
+/* =========================
+   Detection Results
+========================= */
+
+export interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface Detection {
+  id: number;          // tracking ID
+  label: ObjectClass;
+  confidence: number;
+  bbox: BoundingBox;
+}
+
+
+/* =========================
+   System Events (Log)
+========================= */
+
+export interface EventLogEntry {
+  id: string;
+  timestamp: string;
+  zoneName: string;
+  objectClass: ObjectClass | "unknown";
+  message: string;
+  severity: AlertSeverity;
+}
+
+
+/* =========================
+   System Status
+========================= */
+
+export type SystemStatus =
+  | "idle"
+  | "running"
+  | "alert"
+  | "error";
+
+
+/* =========================
+   Metrics
+========================= */
+
+export interface SystemMetrics {
+  fps: number;
+  trackedObjects: number;
+  activeAlerts: number;
+}
