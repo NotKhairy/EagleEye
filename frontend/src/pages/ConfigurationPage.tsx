@@ -3,7 +3,7 @@ import DetectionSettingsPanel from "../components/DetectionSettingsPanel";
 import ZoneCanvas, { type ZoneCanvasHandle } from "../components/ZoneCanvas";
 import FooterStatusBar from "../components/FooterStatusBar";
 import type { VideoSource, VideoSourceType } from "../types/types";
-import { clearZones, saveZone, setGlobalConfig, type GlobalConfig } from "../services/api";
+import { clearZones, saveZone, setGlobalConfig, startMonitoring, type GlobalConfig } from "../services/api";
 
 type CameraOption = {
   deviceId: string;
@@ -176,7 +176,7 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     setSelectedCameraId(deviceId || null);
   };
 
-  const handleStartMonitoring = async (globalConfig: GlobalConfig) => {
+  const handleStartMonitoring = async (globalConfig: GlobalConfig, videoSourceData: VideoSource) => {
     const handle = zoneCanvasRef.current;
     if (!handle) return;
 
@@ -186,6 +186,7 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     const exportHeight = height > 0 ? height : 1;
 
     try {
+      // Save zones and global config
       await clearZones();
       for (const zone of zones) {
         await saveZone({
@@ -197,12 +198,30 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
         });
       }
       await setGlobalConfig(globalConfig);
+
+      // Determine the video source string to send to backend
+      let videoSourceString: string;
+      if (videoSourceData.type === "camera") {
+        // For camera, find the index in the cameras array
+        const cameraIndex = cameras.findIndex(cam => cam.deviceId === videoSourceData.deviceId);
+        videoSourceString = cameraIndex >= 0 ? String(cameraIndex) : "0";
+        console.log(`[CONFIG] Sending camera index: ${videoSourceString} (from deviceId: ${videoSourceData.deviceId})`);
+      } else {
+        // For video file, use the file path or name
+        videoSourceString = videoSourceData.filePath || videoSourceData.name || "video.mp4";
+        console.log(`[CONFIG] Sending video file: ${videoSourceString}`);
+      }
+
+      // Start monitoring with the video source
+      await startMonitoring(videoSourceString);
     } catch (err) {
-      console.error("Failed to save zones on start monitoring:", err);
-    } finally {
-      // Navigate to dashboard even if persistence fails, so processing view can start.
-      onMonitoringStarted();
+      console.error("Failed to start monitoring:", err);
+      alert(`Error starting monitoring: ${err instanceof Error ? err.message : "Unknown error"}`);
+      return;
     }
+
+    // Navigate to dashboard
+    onMonitoringStarted();
   };
 
   useEffect(() => {
@@ -267,6 +286,7 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     <div className="flex flex-1 overflow-hidden bg-[#0B0F14] text-white">
       <DetectionSettingsPanel
         videoSourceType={videoSourceType}
+        videoSource={videoSource}
         cameras={cameras}
         selectedCameraId={selectedCameraId}
         uploadedVideoName={uploadedVideoName}

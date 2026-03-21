@@ -80,3 +80,14 @@ export async function startModelProcessing(): Promise<void> {
     await throwWithResponse("Failed to start model processing", response);
   }
 }
+
+export async function startMonitoring(videoSource: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/start_monitoring`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video_source: videoSource }),
+  });
+  if (!response.ok) {
+    await throwWithResponse("Failed to start monitoring", response);
+  }
+}

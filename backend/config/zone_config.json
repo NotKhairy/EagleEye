@@ -1,1 +1,24 @@
-[]
+[
+    {
+        "zone_name": "Zone 1",
+        "zone_id": "zone-1774115372503",
+        "description": "Detection zone",
+        "trigger": "person",
+        "coordinates": [
+            [
+                98.0,
+                15.0
+            ],
+            [
+                86.0,
+                45.0
+            ],
+            [
+                149.0,
+                35.0
+            ]
+        ],
+        "rule": "enter",
+        "severity": "info"
+    }
+]

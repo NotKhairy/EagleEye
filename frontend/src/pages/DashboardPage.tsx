@@ -1,26 +1,16 @@
 import { useEffect } from "react";
 import EventLog from "../components/EventLogPanel";
 import VideoPlayer from "../components/VideoSection";
-import { startModelProcessing, VIDEO_FEED_URL } from "../services/api";
+import { VIDEO_FEED_URL } from "../services/api";
 
-let hasStartedProcessing = false;
+type DashboardPageProps = {
+  onBackToConfig?: () => void;
+};
 
-export default function DashboardPage() {
+export default function DashboardPage({ onBackToConfig }: DashboardPageProps) {
   useEffect(() => {
-    if (hasStartedProcessing) {
-      return;
-    }
-    hasStartedProcessing = true;
-
-    const start = async () => {
-      try {
-        await startModelProcessing();
-      } catch (err) {
-        console.error("Failed to start model processing:", err);
-      }
-    };
-
-    start();
+    // Log that dashboard mounted
+    console.log("Dashboard: Video stream should be active from /start_monitoring API call");
   }, []);
 
   return (

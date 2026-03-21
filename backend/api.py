@@ -33,8 +33,13 @@ def root():
 def video_feed():
     target_fps = 15
     frame_interval = 1.0 / target_fps
+    frames_sent = 0
+    
+    print("[video_feed] Stream connected, waiting for frames...")
 
     def generate():
+        nonlocal frames_sent
+        startup_delay = 0  # Track time waiting for first frame
         while True:
             frame = None
             with runtime_lock:
@@ -42,6 +47,10 @@ def video_feed():
                     frame = runtime.latest_annotated_frame.copy()
 
             if frame is None:
+                startup_delay += 0.05
+                if startup_delay > 5:  # Log every 5 seconds if no frames
+                    print(f"[video_feed] Still waiting for frames... (elapsed: {startup_delay}s)")
+                    startup_delay = 0
                 time.sleep(0.05)
                 continue
 
@@ -51,6 +60,10 @@ def video_feed():
                 continue
 
             jpg = buffer.tobytes()
+            frames_sent += 1
+            if frames_sent == 1:
+                print(f"[video_feed] ✓ First frame sent! Frame size: {len(jpg)} bytes")
+            
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
@@ -148,6 +161,74 @@ def start():
         )
         worker_thread.start()
         return {"status": "started"}
+
+
+class StartMonitoringPayload(BaseModel):
+    video_source: str
+
+
+@app.post("/start_monitoring")
+def start_monitoring(payload: StartMonitoringPayload):
+    """Initialize runtime with video source and start processing immediately."""
+    global runtime, worker_thread, stop_event
+    with runtime_lock:
+        # Stop any existing processing
+        if worker_thread is not None and worker_thread.is_alive():
+            print("[start_monitoring] Stopping existing worker thread...")
+            stop_event.set()
+            worker_thread.join(timeout=2)
+            worker_thread = None
+        
+        if runtime is not None:
+            print("[start_monitoring] Closing existing runtime...")
+            close_runtime(runtime)
+            runtime = None
+        
+        # Read the global config to get frame skip and confidence threshold
+        try:
+            with open(DEFAULT_GLOBAL_CONFIG, "r") as f:
+                global_config_data = json.load(f)
+                if isinstance(global_config_data, list) and len(global_config_data) > 0:
+                    config = global_config_data[0]
+                    frame_skip = config.get("frameSkip", 5)
+                    confidence = config.get("confidenceThreshold", 0.3)
+                else:
+                    frame_skip = 5
+                    confidence = 0.3
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"[start_monitoring] Warning: Could not read global config: {e}")
+            frame_skip = 5
+            confidence = 0.3
+        
+        # Initialize runtime with the provided video source
+        print(f"[start_monitoring] Initializing runtime with video_source: {payload.video_source}")
+        stop_event = threading.Event()
+        runtime = create_runtime(
+            model_path="yolov8n.pt",
+            confidence=confidence,
+            zone_config_path="config/zone_config.json",
+            video_source=payload.video_source,
+            frame_skip=frame_skip,
+            show_window=False,
+        )
+        
+        if runtime is None:
+            error_msg = f"Could not initialize video source: {payload.video_source}"
+            print(f"[start_monitoring] ERROR: {error_msg}")
+            return {"status": "error", "message": error_msg}
+        
+        # Start the processing loop in a background thread
+        print("[start_monitoring] Starting processing loop thread...")
+        worker_thread = threading.Thread(
+            target=run_loop_in_thread,
+            args=(runtime, stop_event),
+            daemon=True,
+        )
+        worker_thread.start()
+        
+        status = get_runtime_status(runtime)
+        print(f"[start_monitoring] SUCCESS: Runtime started with status: {status}")
+        return {"status": "started", "video_source": payload.video_source, "runtime": status}
 
 
 @app.post("/step")

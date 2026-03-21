@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { VideoSourceType } from "../types/types";
+import type { VideoSourceType, VideoSource } from "../types/types";
 import PhoneInput from "react-phone-number-input";
 import "react-phone-number-input/style.css";
 import type { E164Number } from "libphonenumber-js";
@@ -12,6 +12,7 @@ type CameraOption = {
 
 type DetectionSettingsPanelProps = {
   videoSourceType: VideoSourceType | undefined;
+  videoSource: VideoSource | null;
   cameras: CameraOption[];
   selectedCameraId: string | null;
   uploadedVideoName: string | null;
@@ -21,11 +22,12 @@ type DetectionSettingsPanelProps = {
   onActivateUploadFile: () => void;
   onUploadVideoFile: (file: File) => void;
   onSelectCamera: (deviceId: string) => void;
-  onStartMonitoring: (config: GlobalConfig) => Promise<void>;
+  onStartMonitoring: (config: GlobalConfig, videoSource: VideoSource) => Promise<void>;
 };
 
 export default function DetectionSettingsPanel({
   videoSourceType,
+  videoSource,
   cameras,
   selectedCameraId,
   uploadedVideoName,
@@ -56,6 +58,35 @@ export default function DetectionSettingsPanel({
 
 
   const handleStartMonitoring = async () => {
+    // Validate constraints
+    const constraints: string[] = [];
+
+    if (!videoSourceType || (videoSourceType === "camera" && !selectedCamera) || (videoSourceType === "video_file" && !uploadedVideoName)) {
+      constraints.push("Please select a video source.");
+    }
+
+    if (emailEnabled && !emailAddress.trim()) {
+      constraints.push("Email enabled but no email address provided.");
+    }
+
+    if (smsEnabled && !phoneNumber) {
+      constraints.push("SMS enabled but no phone number provided.");
+    }
+
+    if (callEnabled && !callPhoneNumber) {
+      constraints.push("Call enabled but no phone number provided.");
+    }
+
+    if (constraints.length > 0) {
+      alert(constraints.join("\n"));
+      return;
+    }
+
+    if (!videoSource) {
+      alert("Video source is not properly configured.");
+      return;
+    }
+
     const globalConfig: GlobalConfig = {
       frameSkip,
       confidenceThreshold,
@@ -67,13 +98,8 @@ export default function DetectionSettingsPanel({
         Call: callEnabled ? callPhoneNumber ?? null : null,
       },
     };
-    if (!videoSourceType || (videoSourceType === "camera" && !selectedCamera) || (videoSourceType === "video_file" && !uploadedVideoName)) {
-      alert("Please select a video source.");
-      return;
-    }
-    await onStartMonitoring(globalConfig);
-    
-    
+
+    await onStartMonitoring(globalConfig, videoSource);
   };
 
   return (
