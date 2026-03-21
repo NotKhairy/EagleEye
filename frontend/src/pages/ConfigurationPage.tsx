@@ -180,8 +180,8 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     probe.crossOrigin = "anonymous";
     
     let metadataLoaded = false;
-    let metadataTimeout: NodeJS.Timeout | null = null;
-    let dimensionCheckTimeout: NodeJS.Timeout | null = null;
+    let metadataTimeout: number | null = null;
+    let dimensionCheckTimeout: number | null = null;
     
     const cleanup = () => {
       if (metadataTimeout) clearTimeout(metadataTimeout);
