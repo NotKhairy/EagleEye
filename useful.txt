@@ -1,0 +1,1 @@
+taskkill /F /IM node.exe /IM python.exe 2>$null; Write-Host "√ All servers stopped"

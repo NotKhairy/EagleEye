@@ -1,1 +1,54 @@
-[]
+[
+    {
+        "zone_name": "Zone 1",
+        "zone_id": "zone-1774124822073",
+        "description": "Detection zone",
+        "trigger": "car",
+        "coordinates": [
+            [
+                260.0,
+                531.0
+            ],
+            [
+                413.0,
+                455.0
+            ],
+            [
+                512.0,
+                552.0
+            ],
+            [
+                398.0,
+                606.0
+            ]
+        ],
+        "rule": "enter",
+        "severity": "info"
+    },
+    {
+        "zone_name": "Zone 2",
+        "zone_id": "zone-1774124830020",
+        "description": "Detection zone",
+        "trigger": "person",
+        "coordinates": [
+            [
+                508.0,
+                613.0
+            ],
+            [
+                1180.0,
+                601.0
+            ],
+            [
+                1171.0,
+                676.0
+            ],
+            [
+                509.0,
+                664.0
+            ]
+        ],
+        "rule": "enter",
+        "severity": "info"
+    }
+]
