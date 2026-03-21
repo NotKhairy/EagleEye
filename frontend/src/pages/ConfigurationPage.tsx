@@ -91,6 +91,10 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
 
       permissionStream.getTracks().forEach((track) => track.stop());
       setCameras(cameraOptions);
+      console.log(`[CONFIG] Detected ${cameraOptions.length} cameras:`);
+      cameraOptions.forEach((c, i) => {
+        console.log(`  [${i}] ${c.label} (deviceId: ${c.deviceId.substring(0, 20)}...)`);
+      });
 
       if (cameraOptions.length === 0) {
         setSourceError("No webcam devices were found.");
@@ -199,13 +203,17 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
       }
       await setGlobalConfig(globalConfig);
 
+      // IMPORTANT: Release the camera stream before starting backend monitoring
+      // This ensures the camera device is not locked by the browser
+      console.log("[CONFIG] Releasing camera stream from browser...");
+      replaceStream(null);
+
       // Determine the video source string to send to backend
       let videoSourceString: string;
       if (videoSourceData.type === "camera") {
-        // For camera, find the index in the cameras array
-        const cameraIndex = cameras.findIndex(cam => cam.deviceId === videoSourceData.deviceId);
-        videoSourceString = cameraIndex >= 0 ? String(cameraIndex) : "0";
-        console.log(`[CONFIG] Sending camera index: ${videoSourceString} (from deviceId: ${videoSourceData.deviceId})`);
+        // Always use camera index 0 (default webcam)
+        videoSourceString = "0";
+        console.log(`[CONFIG] Selected: "${videoSourceData.name}" - opening default camera (index 0)`);
       } else {
         // For video file, use the file path or name
         videoSourceString = videoSourceData.filePath || videoSourceData.name || "video.mp4";

@@ -1,7 +1,7 @@
 [
     {
-        "frameSkip": 18,
-        "confidenceThreshold": 0.24,
+        "frameSkip": 11,
+        "confidenceThreshold": 0.6,
         "Action": {
             "desktopPush": true,
             "emailDigest": null,
