@@ -244,7 +244,7 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
           ) : showUploadedVideo ? (
             <video
               ref={uploadedVideoRef}
-              src={videoSource?.filePath}
+              src={videoSource?.previewUrl}
               controls
               playsInline
               onLoadedMetadata={(event) => {

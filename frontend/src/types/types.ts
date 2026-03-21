@@ -9,7 +9,8 @@ export type VideoSourceType = "camera" | "video_file";
 export interface VideoSource {
   type: VideoSourceType;
   deviceId?: string;
-  filePath?: string;
+  filePath?: string;  // Backend file path for API calls
+  previewUrl?: string;  // Blob URL for browser preview
   name?: string;
 }
 

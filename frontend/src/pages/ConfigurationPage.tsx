@@ -3,7 +3,7 @@ import DetectionSettingsPanel from "../components/DetectionSettingsPanel";
 import ZoneCanvas, { type ZoneCanvasHandle } from "../components/ZoneCanvas";
 import FooterStatusBar from "../components/FooterStatusBar";
 import type { VideoSource, VideoSourceType } from "../types/types";
-import { clearZones, saveZone, setGlobalConfig, startMonitoring, type GlobalConfig } from "../services/api";
+import { clearZones, saveZone, setGlobalConfig, startMonitoring, uploadVideoFile, type GlobalConfig } from "../services/api";
 
 type CameraOption = {
   deviceId: string;
@@ -119,7 +119,7 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     setMediaFPS("N/A");
   };
 
-  const handleUploadVideoFile = (file: File) => {
+  const handleUploadVideoFile = async (file: File) => {
     revokeUploadedVideoUrl();
 
     const supportProbe = document.createElement("video");
@@ -145,11 +145,26 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     setSourceError(null);
     replaceStream(null);
     setUploadedVideoName(file.name);
-    setVideoSource({
-      type: "video_file",
-      filePath: objectUrl,
-      name: file.name,
-    });
+    
+    // Upload the file to backend first
+    try {
+      console.log("[CONFIG] Uploading video file to backend...");
+      const backendFilePath = await uploadVideoFile(file);
+      console.log(`[CONFIG] File uploaded successfully, backend path: ${backendFilePath}`);
+      
+      setVideoSource({
+        type: "video_file",
+        filePath: backendFilePath,  // Backend path for API calls
+        previewUrl: objectUrl,  // Blob URL for browser preview
+        name: file.name,
+      });
+    } catch (err) {
+      console.error("[CONFIG] Failed to upload video file:", err);
+      setSourceError(`Failed to upload video file: ${err instanceof Error ? err.message : "Unknown error"}`);
+      setVideoSource(null);
+      revokeUploadedVideoUrl();
+      return;
+    }
 
     // Metadata-based resolution for uploaded files; FPS is not reliably available from file metadata.
     const probe = document.createElement("video");
@@ -293,7 +308,7 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
       ? liveStream === null
         ? "waiting"
         : "success"
-      : videoSource?.filePath
+      : videoSource?.previewUrl
         ? "success"
         : "waiting";
 

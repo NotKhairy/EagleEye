@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -27,6 +27,27 @@ runtime_lock = threading.Lock()
 @app.get("/")
 def root():
     return {"message": "EagleEye backend running"}
+
+
+@app.post("/upload_video")
+async def upload_video(file: UploadFile = File(...)):
+    """Upload a video file and return the path for use with start_monitoring."""
+    try:
+        # Create uploads directory if it doesn't exist
+        upload_dir = "uploads"
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        # Save the uploaded file
+        file_path = os.path.join(upload_dir, file.filename)
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        print(f"[upload_video] File uploaded: {file_path}")
+        return {"status": "success", "file_path": file_path}
+    except Exception as e:
+        print(f"[upload_video] Error uploading file: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 @app.get("/video_feed")
@@ -321,6 +342,11 @@ def _zone_config_path() -> str:
     if runtime is not None:
         return runtime.zone_manager.config_path
     return DEFAULT_ZONE_CONFIG
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
 @app.post("/zones")

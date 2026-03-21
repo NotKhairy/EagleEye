@@ -72,6 +72,23 @@ export async function setGlobalConfig(config: GlobalConfig): Promise<void> {
   }
 }
 
+export async function uploadVideoFile(file: File): Promise<string> {
+  const formData = new FormData();
+  formData.append("file", file);
+  
+  const response = await fetch(`${API_BASE}/upload_video`, {
+    method: "POST",
+    body: formData,
+  });
+  
+  if (!response.ok) {
+    await throwWithResponse("Failed to upload video file", response);
+  }
+  
+  const data = await response.json();
+  return data.file_path;
+}
+
 export async function startModelProcessing(): Promise<void> {
   const response = await fetch(`${API_BASE}/start`, {
     method: "POST",

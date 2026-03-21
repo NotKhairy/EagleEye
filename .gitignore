@@ -34,3 +34,4 @@ Thumbs.db
 # *.pt
 
 /videos/
+./backend/uploads/

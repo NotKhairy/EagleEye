@@ -1,5 +1,4 @@
-from flask import json
-
+import json
 import cv2
 import threading
 import os
