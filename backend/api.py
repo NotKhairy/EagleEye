@@ -271,11 +271,23 @@ def stop():
 @app.post("/clear_zones")
 def clear_zones():
     global runtime
+    config_path = _zone_config_path()
+    
+    # Clear zones from JSON file
+    try:
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, "w") as f:
+            json.dump([], f, indent=4)
+        print("[clear_zones] Cleared zone_config.json file")
+    except Exception as e:
+        print(f"[clear_zones] Error clearing zone config file: {e}")
+    
+    # Clear zones from runtime if it exists
     with runtime_lock:
         if runtime is None:
-            return {"status": "not initialized"}
+            return {"status": "zones cleared (no runtime)"}
         runtime.zone_manager.clear_all_zones()
-        return {"status": "zones cleared"}
+        return {"status": "zones cleared from runtime and file"}
 
 
 @app.get("/status")

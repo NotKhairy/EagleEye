@@ -191,7 +191,10 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
 
     try {
       // Save zones and global config
+      console.log("[CONFIG] Clearing all zones from backend...");
       await clearZones();
+      console.log("[CONFIG] Zones cleared successfully");
+      
       for (const zone of zones) {
         await saveZone({
           ...zone,
@@ -200,8 +203,12 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
             y: Math.round(p.y * exportHeight),
           })),
         });
+        console.log(`[CONFIG] Saved zone: ${zone.name}`);
       }
+      console.log(`[CONFIG] Total zones saved: ${zones.length}`);
+      
       await setGlobalConfig(globalConfig);
+      console.log("[CONFIG] Global config saved");
 
       // IMPORTANT: Release the camera stream before starting backend monitoring
       // This ensures the camera device is not locked by the browser

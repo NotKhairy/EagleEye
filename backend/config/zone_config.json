@@ -1,128 +1,28 @@
 [
     {
         "zone_name": "Zone 1",
-        "zone_id": "zone-1774115372503",
+        "zone_id": "zone-1774118118024",
         "description": "Detection zone",
         "trigger": "person",
         "coordinates": [
             [
-                98.0,
-                15.0
+                90.0,
+                272.0
             ],
             [
-                86.0,
-                45.0
+                708.0,
+                268.0
             ],
             [
-                149.0,
-                35.0
+                711.0,
+                749.0
+            ],
+            [
+                103.0,
+                759.0
             ]
         ],
-        "rule": "enter",
-        "severity": "info"
-    },
-    {
-        "zone_name": "Zone 1",
-        "zone_id": "zone-1774115610837",
-        "description": "Detection zone",
-        "trigger": "person",
-        "coordinates": [
-            [
-                312.0,
-                181.0
-            ],
-            [
-                579.0,
-                181.0
-            ],
-            [
-                572.0,
-                475.0
-            ],
-            [
-                320.0,
-                469.0
-            ]
-        ],
-        "rule": "enter",
-        "severity": "info"
-    },
-    {
-        "zone_name": "Zone 1",
-        "zone_id": "zone-1774116293821",
-        "description": "Detection zone",
-        "trigger": "person",
-        "coordinates": [
-            [
-                158.0,
-                178.0
-            ],
-            [
-                478.0,
-                174.0
-            ],
-            [
-                469.0,
-                470.0
-            ],
-            [
-                189.0,
-                467.0
-            ]
-        ],
-        "rule": "exit",
-        "severity": "info"
-    },
-    {
-        "zone_name": "Zone 1",
-        "zone_id": "zone-1774116625393",
-        "description": "Detection zone",
-        "trigger": "person",
-        "coordinates": [
-            [
-                167.0,
-                139.0
-            ],
-            [
-                418.0,
-                141.0
-            ],
-            [
-                421.0,
-                445.0
-            ],
-            [
-                152.0,
-                435.0
-            ]
-        ],
-        "rule": "exit",
-        "severity": "info"
-    },
-    {
-        "zone_name": "Zone 1",
-        "zone_id": "zone-1774117170161",
-        "description": "Detection zone",
-        "trigger": "person",
-        "coordinates": [
-            [
-                304.0,
-                184.0
-            ],
-            [
-                541.0,
-                199.0
-            ],
-            [
-                515.0,
-                465.0
-            ],
-            [
-                249.0,
-                455.0
-            ]
-        ],
-        "rule": "enter",
+        "rule": "dwell",
         "severity": "info"
     }
 ]

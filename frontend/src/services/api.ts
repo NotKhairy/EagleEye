@@ -91,3 +91,12 @@ export async function startMonitoring(videoSource: string): Promise<void> {
     await throwWithResponse("Failed to start monitoring", response);
   }
 }
+
+export async function stopMonitoring(): Promise<void> {
+  const response = await fetch(`${API_BASE}/stop`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    await throwWithResponse("Failed to stop monitoring", response);
+  }
+}

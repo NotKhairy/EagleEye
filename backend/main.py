@@ -2,7 +2,6 @@ from flask import json
 
 import cv2
 import threading
-import time
 import os
 from detection.detector import ObjectDetector
 from detection.zone_logic import ZoneManager
@@ -79,18 +78,6 @@ def create_runtime(
         print(f"Could not open video source: {resolved_video_source}")
         return None
 
-    # Give camera time to initialize (especially important for USB cameras)
-    if isinstance(resolved_video_source, int):
-        print(f"Initializing camera {resolved_video_source}... configuring and waiting 2 seconds")
-        
-        # Set camera properties to optimize streaming
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer to get fresh frames
-        cap.set(cv2.CAP_PROP_FPS, 30)  # Set target FPS
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)  # Set resolution
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        
-        time.sleep(2)  # Extended wait for camera to be ready
-
     runtime = EagleEyeRuntime(
         detector=detector,
         zone_manager=zone_manager,
@@ -161,24 +148,6 @@ def handle_key_input(runtime, key):
 
 def run_loop(runtime, stop_event=None):
     """Run the frame processing loop until stop condition is met."""
-    # Warmup: discard first 10 frames to ensure camera is ready
-    print("Warming up camera... discarding first 10 frames with 200ms delays")
-    frame_count = 0
-    for i in range(10):
-        ret, frame = runtime.cap.read()
-        if ret:
-            frame_count += 1
-            print(f"  Warmup frame {i+1}/10 OK")
-        else:
-            print(f"  Warmup frame {i+1}/10 FAILED - waiting longer...")
-        time.sleep(0.2)  # 200ms between warmup frames
-    
-    if frame_count == 0:
-        print("ERROR: Camera did not produce any frames during warmup!")
-        print("This may indicate the camera is in use by another application or has a driver issue.")
-    else:
-        print(f"Camera warmup complete ({frame_count} frames captured), starting main loop")
-    
     while True:
         if stop_event is not None and stop_event.is_set():
             break
