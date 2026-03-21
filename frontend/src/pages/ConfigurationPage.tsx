@@ -120,13 +120,17 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
   };
 
   const handleUploadVideoFile = async (file: File) => {
+    console.log(`[CONFIG] File selected: ${file.name} (${file.type}, ${(file.size / 1024 / 1024).toFixed(2)} MB)`);
     revokeUploadedVideoUrl();
 
     const supportProbe = document.createElement("video");
     const typeIsKnown = typeof file.type === "string" && file.type.length > 0;
     const typeSupported = !typeIsKnown || supportProbe.canPlayType(file.type) !== "";
-    if (!typeSupported) {
-      setSourceError("This video format is not supported by your browser.");
+    
+    if (!typeSupported && typeIsKnown) {
+      const errorMsg = `File MIME type "${file.type}" is not supported by your browser. Use: video/mp4, video/webm, video/quicktime`;
+      console.error("[CONFIG]", errorMsg);
+      setSourceError(errorMsg);
       setVideoSourceType("video_file");
       setSelectedCameraId(null);
       replaceStream(null);
@@ -135,6 +139,10 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
       setMediaResolution("N/A");
       setMediaFPS("N/A");
       return;
+    }
+    
+    if (!typeIsKnown) {
+      console.warn("[CONFIG] File has no MIME type - will attempt to load anyway (may fail if unsupported format)");
     }
 
     const objectUrl = URL.createObjectURL(file);
@@ -169,26 +177,89 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     // Metadata-based resolution for uploaded files; FPS is not reliably available from file metadata.
     const probe = document.createElement("video");
     probe.preload = "metadata";
-    probe.onerror = () => {
-      setSourceError("The selected video file could not be loaded.");
+    probe.crossOrigin = "anonymous";
+    
+    let metadataLoaded = false;
+    let metadataTimeout: NodeJS.Timeout | null = null;
+    let dimensionCheckTimeout: NodeJS.Timeout | null = null;
+    
+    const cleanup = () => {
+      if (metadataTimeout) clearTimeout(metadataTimeout);
+      if (dimensionCheckTimeout) clearTimeout(dimensionCheckTimeout);
+      probe.src = "";
+      probe.onloadedmetadata = null;
+      probe.onloadeddata = null;
+      probe.oncanplay = null;
+      probe.onerror = null;
+    };
+    
+    const checkDimensions = () => {
+      console.log(`[CONFIG] Checking dimensions: ${probe.videoWidth}x${probe.videoHeight}`);
+      
+      if (probe.videoWidth > 0 && probe.videoHeight > 0) {
+        console.log(`[CONFIG] ✓ Video dimensions detected: ${probe.videoWidth}x${probe.videoHeight}`);
+        if (metadataLoaded) return; // Already processed
+        metadataLoaded = true;
+        cleanup();
+        
+        setSourceError(null);
+        setMediaResolution(`${probe.videoWidth} x ${probe.videoHeight}`);
+        setMediaFPS("N/A");
+      }
+    };
+    
+    probe.onerror = (event) => {
+      console.error("[CONFIG] Video probe error:", event);
+      if (metadataLoaded) return;
+      metadataLoaded = true;
+      cleanup();
+      
+      const errorMsg = `Browser cannot play this video format. Supported: H.264 (MP4), VP8/VP9 (WebM). Try: ffmpeg -i "${file.name}" -c:v libx264 -preset fast output.mp4`;
+      console.error("[CONFIG]", errorMsg);
+      setSourceError(errorMsg);
       setVideoSource(null);
       setMediaResolution("N/A");
       setMediaFPS("N/A");
       revokeUploadedVideoUrl();
     };
-    probe.src = objectUrl;
+    
+    // Try to get dimensions from loadedmetadata
     probe.onloadedmetadata = () => {
-      if (probe.videoWidth > 0 && probe.videoHeight > 0) {
-        setSourceError(null);
-        setMediaResolution(`${probe.videoWidth} x ${probe.videoHeight}`);
-        setMediaFPS("N/A");
-      } else {
-        setSourceError("The selected video file could not be decoded.");
+      console.log("[CONFIG] loadedmetadata event fired");
+      // Check immediately, but also schedule a check in case dimensions aren't ready yet
+      checkDimensions();
+      if (!metadataLoaded && probe.videoWidth === 0) {
+        dimensionCheckTimeout = setTimeout(checkDimensions, 100);
+      }
+    };
+    
+    // Also try loadeddata and canplay events - more reliable for dimensions
+    probe.onloadeddata = () => {
+      console.log("[CONFIG] loadeddata event fired");
+      checkDimensions();
+    };
+    
+    probe.oncanplay = () => {
+      console.log("[CONFIG] canplay event fired");
+      checkDimensions();
+    };
+    
+    // Timeout: if metadata doesn't load in 5 seconds, assume error
+    metadataTimeout = setTimeout(() => {
+      if (!metadataLoaded) {
+        metadataLoaded = true;
+        cleanup();
+        console.error("[CONFIG] Video metadata loading timeout (5s) - dimensions never loaded");
+        setSourceError("Video file took too long to load or has invalid metadata. Try converting: ffmpeg -i \"" + file.name + "\" -c:v libx264 -preset fast output.mp4");
         setVideoSource(null);
         setMediaResolution("N/A");
         setMediaFPS("N/A");
+        revokeUploadedVideoUrl();
       }
-    };
+    }, 5000);
+    
+    console.log("[CONFIG] Probing video with URL:", objectUrl?.substring(0, 50) + "...");
+    probe.src = objectUrl;
   };
 
   const handleSelectCamera = (deviceId: string) => {
