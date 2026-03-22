@@ -1,11 +1,17 @@
 import cv2
 from deep_sort_realtime.deepsort_tracker import DeepSort
+import json
 from ultralytics import YOLO
 import time
 
 class ObjectDetector:
     """Handles YOLO detection + DeepSORT tracking and object-zone matching."""
     
+    with open("config/global_config.json", "r") as f:
+        _config_data = json.load(f)
+        # Handle both list and dict formats
+        global_config = _config_data[0] if isinstance(_config_data, list) else _config_data
+
     def __init__(self, model_path="yolov8n.pt", confidence=0.5, trigger_cooldown_seconds=5):
         self.model = YOLO(model_path)
         self.confidence = confidence
@@ -13,6 +19,11 @@ class ObjectDetector:
         self.trigger_cooldown_seconds = trigger_cooldown_seconds
         # key: (zone_id, track_id), value: last trigger timestamp
         self.last_trigger_times = {}
+    
+    def clear_trigger_times(self):
+        """Clear all trigger cooldown times to allow immediate re-triggering on reset."""
+        self.last_trigger_times.clear()
+        print("[INFO] Trigger cooldown times cleared")
     
     def track(self, frame):
         """Run YOLO detection, then DeepSORT tracking for persistent IDs."""
@@ -56,6 +67,68 @@ class ObjectDetector:
             )
 
         return tracked_objects
+    
+    def handle_trigger(self, zone, detection):
+        """Handle trigger actions based on global config settings."""
+        Action = self.global_config.get("Action", {})
+        
+        # Check desktopPush
+        if Action.get("desktopPush"):
+            self._handle_desktop_push(zone, detection)
+        
+        # Check email
+        email = Action.get("email")
+        if email:
+            self._handle_email(zone, detection, email)
+        
+        # Check saveSnapshotLocally
+        if Action.get("saveSnapshotLocally"):
+            self._handle_save_snapshot(zone, detection)
+        
+        # Check SMS
+        sms_number = Action.get("SMS")
+        if sms_number:
+            self._handle_sms(zone, detection, sms_number)
+        
+        # Check CALL
+        call_number = Action.get("CALL")
+        if call_number:
+            self._handle_call(zone, detection, call_number)
+    
+    def _handle_desktop_push(self, zone, detection):
+        """Send a desktop push notification."""
+        try:
+            from win10toast import ToastNotifier
+            toaster = ToastNotifier()
+            message = f"Zone '{zone['name']}' triggered by {detection['label']} (ID: {detection['track_id']})"
+            toaster.show_toast(
+                title="EagleEye Detection Alert",
+                msg=message,
+                duration=5,
+                threaded=True
+            )
+        except ImportError:
+            print("[MOCK - desktopPush] win10toast not installed. Install with: pip install win10toast")
+            print(f"[MOCK - desktopPush] Zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
+    
+    def _handle_email(self, zone, detection, email_address):
+        """Send email notification."""
+        print(f"[MOCK - email] Sending email to {email_address} for zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
+    
+    def _handle_save_snapshot(self, zone, detection):
+        """Save snapshot locally."""
+        print(f"[MOCK - saveSnapshotLocally] Saving snapshot for zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
+    
+    def _handle_sms(self, zone, detection, phone_number):
+        """Send SMS notification."""
+        print(f"[MOCK - SMS] Sending SMS to {phone_number} for zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
+    
+    def _handle_call(self, zone, detection, phone_number):
+        """Make phone call notification."""
+        print(f"[MOCK - CALL] Calling {phone_number} for zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
+        
+
+            
     
     def get_box_center(self, box):
         """Calculate the center point of a bounding box"""
@@ -108,6 +181,8 @@ class ObjectDetector:
                             f"Zone '{zone['name']}' triggered by {detection['label']} "
                             f"(ID: {detection['track_id']}), {action_text}"
                         )
+
+                        self.handle_trigger(zone, detection)
                     
                     break
         

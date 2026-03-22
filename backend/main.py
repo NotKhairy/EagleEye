@@ -202,11 +202,11 @@ def main():
 
 
 def draw_ui(frame, zone_manager, any_zone_triggered):
-    """Draw UI elements on frame"""
-    # Instructions
-    instructions = "Left-click: Add point/close polygon | Esc: Cancel draft | Right-click: Delete | 'c': Clear all | 'q': Quit"
-    cv2.putText(frame, instructions, (10, 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    # """Draw UI elements on frame"""
+    # # Instructions
+    # instructions = "Left-click: Add point/close polygon | Esc: Cancel draft | Right-click: Delete | 'c': Clear all | 'q': Quit"
+    # cv2.putText(frame, instructions, (10, 30), 
+    #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     
     # Status information
     zone_count = len(zone_manager.zones)

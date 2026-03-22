@@ -27,12 +27,14 @@ class ZoneManager:
                         if len(polygon) >= 3:
                             raw_trigger = zone_data.get("trigger", "Person")
                             self.zones.append({
-                                "id": zone_data.get("zone_id", len(self.zones) + 1),
                                 "name": zone_data.get("zone_name", f"Zone {len(self.zones) + 1}"),
-                                "coordinates": polygon,
+                                "id": zone_data.get("zone_id", len(self.zones) + 1),
+                                "description": zone_data.get("description", ""),
                                 "trigger": self._normalize_trigger(raw_trigger),
-                                "triggered": False,
-                                "onTrigger": zone_data.get("onTrigger", "No action defined")
+                                "coordinates": polygon,
+                                "rule": zone_data.get("rule", ""),
+                                "severity": zone_data.get("severity", ""),
+                                "triggered": False
                             })
         except:
             self.zones = []
@@ -45,9 +47,12 @@ class ZoneManager:
             config.append({
                 "zone_name": zone["name"],
                 "zone_id": zone["id"],
-                "description": "Detection zone",
+                "description": zone["description"],
                 "trigger": trigger_value,
-                "coordinates": list(zone["coordinates"])
+                "coordinates": list(zone["coordinates"]),
+                "rule": zone["rule"],
+                "severity": zone["severity"]
+
             })
         
         with open(self.config_path, "w") as f:

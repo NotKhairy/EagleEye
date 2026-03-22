@@ -1,11 +1,11 @@
 [
     {
-        "frameSkip": 2,
-        "confidenceThreshold": 0.5,
+        "frameSkip": 4,
+        "confidenceThreshold": 0.15,
         "Action": {
             "desktopPush": true,
             "emailDigest": null,
-            "saveSnapshotLocally": true,
+            "saveSnapshotLocally": false,
             "SMS": null,
             "Call": null
         }
