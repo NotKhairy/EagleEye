@@ -2,6 +2,7 @@ import json
 import cv2
 import threading
 import os
+from datetime import datetime
 from detection.detector import ObjectDetector
 from detection.zone_logic import ZoneManager
 
@@ -25,6 +26,7 @@ class EagleEyeRuntime:
         confidence_threshold=CONFIDENCE_THRESHOLD,
         window_name="EagleEye Detection",
         show_window=True,
+        snapshot_dir="uploads",
     ):
         self.detector = detector
         self.zone_manager = zone_manager
@@ -33,10 +35,12 @@ class EagleEyeRuntime:
         self.confidence_threshold = confidence_threshold
         self.window_name = window_name
         self.show_window = show_window
+        self.snapshot_dir = snapshot_dir
         self.frame_index = 0
         self.tracked_objects = []
         self.last_zone_triggered = False
         self.latest_annotated_frame = None
+        self.last_trigger_events = []  # Store trigger events until they're executed
 
 
 def create_runtime(
@@ -47,10 +51,15 @@ def create_runtime(
     frame_skip=FRAME_SKIP,
     show_window=True,
     window_name="EagleEye Detection",
+    snapshot_dir="uploads",
 ):
     """Create and initialize all components needed for processing."""
     detector = ObjectDetector(model_path=model_path, confidence=confidence)
     zone_manager = ZoneManager(config_path=zone_config_path)
+
+    # Ensure snapshot directory exists
+    if not os.path.exists(snapshot_dir):
+        os.makedirs(snapshot_dir)
 
     resolved_video_source = video_source
     if isinstance(video_source, str) and video_source.strip() != "":
@@ -84,6 +93,7 @@ def create_runtime(
         frame_skip=frame_skip,
         window_name=window_name,
         show_window=show_window,
+        snapshot_dir=snapshot_dir,
     )
 
     if show_window:
@@ -116,21 +126,56 @@ def process_next_frame(runtime):
         line_width=1,
     )
 
-    # Check if matching objects are in any zones.
-    runtime.last_zone_triggered = runtime.detector.check_objects_in_zones(
+    # Check if matching objects are in any zones (collect triggers, don't execute yet).
+    zone_result = runtime.detector.check_objects_in_zones(
         runtime.tracked_objects,
         runtime.zone_manager,
     )
+    runtime.last_zone_triggered = zone_result["any_triggered"]
+    runtime.last_trigger_events = zone_result["trigger_events"]
 
     # Draw all zones and UI.
     runtime.zone_manager.draw_zones(annotated_frame)
     draw_ui(annotated_frame, runtime.zone_manager, runtime.last_zone_triggered)
     runtime.latest_annotated_frame = annotated_frame.copy()
 
+    # Save the annotated frame and execute triggers ONLY if there are trigger events.
+    if runtime.last_trigger_events:
+        snapshot_path = save_snapshot(annotated_frame, runtime.snapshot_dir)
+        if snapshot_path:
+            runtime.detector.execute_trigger_events(runtime.last_trigger_events, snapshot_path)
+
     if runtime.show_window:
         cv2.imshow(runtime.window_name, annotated_frame)
 
     return True
+
+
+def save_snapshot(frame, snapshot_dir="uploads"):
+    """
+    Save the annotated frame as a snapshot with timestamp.
+    
+    Args:
+        frame: The annotated frame to save
+        snapshot_dir: Directory to save snapshots (created if doesn't exist)
+    
+    Returns:
+        str: Path to the saved snapshot, or None if save failed
+    """
+    try:
+        if not os.path.exists(snapshot_dir):
+            os.makedirs(snapshot_dir)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # Include milliseconds
+        filename = f"snapshot_{timestamp}.jpg"
+        filepath = os.path.join(snapshot_dir, filename)
+        
+        cv2.imwrite(filepath, frame)
+        print(f"[INFO] Snapshot saved: {filepath}")
+        return filepath
+    except Exception as e:
+        print(f"[ERROR] Failed to save snapshot: {e}")
+        return None
 
 
 def handle_key_input(runtime, key):

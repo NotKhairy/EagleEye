@@ -50,11 +50,11 @@ export default function DetectionSettingsPanel({
   >();
   const [emailAddress, setEmailAddress] = useState<string>("");
 
-  const [desktopEnabled, setDesktopEnabled] = useState(true);
-  const [saveSnapshotEnabled, setSaveSnapshotEnabled] = useState(true);
-  const [smsEnabled, setSmsEnabled] = useState(true);
-  const [callEnabled, setCallEnabled] = useState(true);
-  const [emailEnabled, setEmailEnabled] = useState(true);
+  const [desktopEnabled, setDesktopEnabled] = useState(false);
+  const [saveSnapshotEnabled, setSaveSnapshotEnabled] = useState(false);
+  const [smsEnabled, setSmsEnabled] = useState(false);
+  const [callEnabled, setCallEnabled] = useState(false);
+  const [emailEnabled, setEmailEnabled] = useState(false);
 
 
   const handleStartMonitoring = async () => {

@@ -3,6 +3,8 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 import json
 from ultralytics import YOLO
 import time
+import smtplib
+from mailService import MailService
 
 class ObjectDetector:
     """Handles YOLO detection + DeepSORT tracking and object-zone matching."""
@@ -19,6 +21,7 @@ class ObjectDetector:
         self.trigger_cooldown_seconds = trigger_cooldown_seconds
         # key: (zone_id, track_id), value: last trigger timestamp
         self.last_trigger_times = {}
+        self.mail_service = MailService()
     
     def clear_trigger_times(self):
         """Clear all trigger cooldown times to allow immediate re-triggering on reset."""
@@ -68,22 +71,25 @@ class ObjectDetector:
 
         return tracked_objects
     
-    def handle_trigger(self, zone, detection):
+    def handle_trigger(self, zone, detection, snapshot=None):
         """Handle trigger actions based on global config settings."""
         Action = self.global_config.get("Action", {})
+        print(Action)
         
         # Check desktopPush
         if Action.get("desktopPush"):
+            print("here 1")
             self._handle_desktop_push(zone, detection)
         
         # Check email
-        email = Action.get("email")
+        email = Action.get("emailDigest")
         if email:
-            self._handle_email(zone, detection, email)
+            print("here 2")
+            self._handle_email(zone, detection, email, snapshot)
         
         # Check saveSnapshotLocally
         if Action.get("saveSnapshotLocally"):
-            self._handle_save_snapshot(zone, detection)
+            self._handle_save_snapshot(zone, detection, snapshot)
         
         # Check SMS
         sms_number = Action.get("SMS")
@@ -94,6 +100,18 @@ class ObjectDetector:
         call_number = Action.get("CALL")
         if call_number:
             self._handle_call(zone, detection, call_number)
+    
+    def execute_trigger_events(self, trigger_events, snapshot_path=None):
+        """
+        Execute all collected trigger events with an optional snapshot.
+        Call this AFTER the annotated frame has been saved.
+        
+        Args:
+            trigger_events: List of trigger event dicts from check_objects_in_zones
+            snapshot_path: Path to the saved annotated frame snapshot
+        """
+        for event in trigger_events:
+            self.handle_trigger(event["zone"], event["detection"], snapshot_path)
     
     def _handle_desktop_push(self, zone, detection):
         """Send a desktop push notification."""
@@ -111,11 +129,17 @@ class ObjectDetector:
             print("[MOCK - desktopPush] win10toast not installed. Install with: pip install win10toast")
             print(f"[MOCK - desktopPush] Zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
     
-    def _handle_email(self, zone, detection, email_address):
-        """Send email notification."""
-        print(f"[MOCK - email] Sending email to {email_address} for zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
+    def _handle_email(self, zone, detection, email_address, snapshot):
+        self.mail_service.send_email(
+            recipient_email=email_address,
+            subject=f"EagleEye Alert: Zone '{zone['name']}' Triggered",
+            body=f"Zone '{zone['name']}' was triggered by {detection['label']} (ID: {detection['track_id']})",
+            attachments=[snapshot] if snapshot else None
+        )
+        print("Success!")
+
     
-    def _handle_save_snapshot(self, zone, detection):
+    def _handle_save_snapshot(self, zone, detection, snapshot):
         """Save snapshot locally."""
         print(f"[MOCK - saveSnapshotLocally] Saving snapshot for zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
     
@@ -158,10 +182,14 @@ class ObjectDetector:
         return annotated
     
     def check_objects_in_zones(self, tracked_objects, zone_manager):
-        """Trigger each zone when matching objects enter it."""
+        """
+        Check if objects are in zones and collect trigger events.
+        DOES NOT execute triggers - returns them for later execution after frame annotation.
+        """
         zone_manager.reset_triggers()
 
         triggered_zones = set()
+        trigger_events = []  # Collect triggers to execute later
 
         for zone in zone_manager.zones:
             for detection in tracked_objects:
@@ -181,9 +209,17 @@ class ObjectDetector:
                             f"Zone '{zone['name']}' triggered by {detection['label']} "
                             f"(ID: {detection['track_id']}), {action_text}"
                         )
-
-                        self.handle_trigger(zone, detection)
+                        
+                        # Collect trigger event instead of executing immediately
+                        trigger_events.append({
+                            "zone": zone,
+                            "detection": detection,
+                            "timestamp": now
+                        })
                     
                     break
         
-        return len(triggered_zones) > 0
+        return {
+            "any_triggered": len(triggered_zones) > 0,
+            "trigger_events": trigger_events
+        }

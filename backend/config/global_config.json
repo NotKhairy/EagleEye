@@ -1,10 +1,10 @@
 [
     {
-        "frameSkip": 4,
-        "confidenceThreshold": 0.15,
+        "frameSkip": 2,
+        "confidenceThreshold": 0.5,
         "Action": {
             "desktopPush": true,
-            "emailDigest": null,
+            "emailDigest": "toxickhairy1324@gmail.com",
             "saveSnapshotLocally": false,
             "SMS": null,
             "Call": null
