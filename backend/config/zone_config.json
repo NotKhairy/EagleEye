@@ -1,25 +1,25 @@
 [
     {
         "zone_name": "Zone 1",
-        "zone_id": "zone-1774226480582",
+        "zone_id": "zone-1774321752721",
         "description": "Detection zone",
-        "trigger": "car",
+        "trigger": "person",
         "coordinates": [
             [
-                325.0,
-                513.0
+                169.0,
+                136.0
             ],
             [
-                462.0,
-                564.0
+                454.0,
+                141.0
             ],
             [
-                388.0,
-                596.0
+                422.0,
+                458.0
             ],
             [
-                275.0,
-                540.0
+                111.0,
+                441.0
             ]
         ],
         "rule": "enter",

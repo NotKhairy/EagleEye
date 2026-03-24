@@ -8,11 +8,21 @@ from detection.zone_logic import ZoneManager
 
 # Process detection every Nth frame (1 = every frame, 2 = every other frame).
 
-with open("config/global_config.json", "r") as f:
-    global_config = json.load(f)[0]
-    FRAME_SKIP = global_config.get("frameSkip", 5)
-    CONFIDENCE_THRESHOLD = global_config.get("confidenceThreshold", 0.3)
-    ACTION = global_config.get("Action", {})
+def load_global_config():
+    """Load global config from file at runtime."""
+    try:
+        with open("config/global_config.json", "r") as f:
+            config_data = json.load(f)
+            return config_data[0] if isinstance(config_data, list) else config_data
+    except Exception as e:
+        print(f"[WARNING] Failed to load global config: {e}")
+        return {"frameSkip": 5, "confidenceThreshold": 0.3, "Action": {}}
+
+# Load defaults - used only if not explicitly provided
+_default_config = load_global_config()
+FRAME_SKIP = _default_config.get("frameSkip", 5)
+CONFIDENCE_THRESHOLD = _default_config.get("confidenceThreshold", 0.3)
+ACTION = _default_config.get("Action", {})
 
 class EagleEyeRuntime:
     """Holds runtime state for the detection loop."""
