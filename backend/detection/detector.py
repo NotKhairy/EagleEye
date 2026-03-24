@@ -8,25 +8,32 @@ from mailService import MailService
 
 class ObjectDetector:
     """Handles YOLO detection + DeepSORT tracking and object-zone matching."""
-    
-    with open("config/global_config.json", "r") as f:
-        _config_data = json.load(f)
-        # Handle both list and dict formats
-        global_config = _config_data[0] if isinstance(_config_data, list) else _config_data
 
     def __init__(self, model_path="yolov8n.pt", confidence=0.5, trigger_cooldown_seconds=5):
         self.model = YOLO(model_path)
         self.confidence = confidence
         self.tracker = DeepSort(max_age=30, n_init=3)
         self.trigger_cooldown_seconds = trigger_cooldown_seconds
-        # key: (zone_id, track_id), value: last trigger timestamp
-        self.last_trigger_times = {}
+        # key: (zone_id, track_id), value: boolean indicating if object is currently in zone
+        self.zone_object_states = {}
         self.mail_service = MailService()
+        self.global_config = self._load_global_config()
     
-    def clear_trigger_times(self):
-        """Clear all trigger cooldown times to allow immediate re-triggering on reset."""
-        self.last_trigger_times.clear()
-        print("[INFO] Trigger cooldown times cleared")
+    def _load_global_config(self):
+        """Load global config at runtime, not at class definition time."""
+        try:
+            with open("config/global_config.json", "r") as f:
+                config_data = json.load(f)
+                # Handle both list and dict formats
+                return config_data[0] if isinstance(config_data, list) else config_data
+        except Exception as e:
+            print(f"[WARNING] Failed to load global config: {e}")
+            return {}
+    
+    def clear_zone_states(self):
+        """Clear all zone-object state tracking to reset on video restart."""
+        self.zone_object_states.clear()
+        print("[INFO] Zone-object states cleared")
     
     def track(self, frame):
         """Run YOLO detection, then DeepSORT tracking for persistent IDs."""
@@ -73,7 +80,9 @@ class ObjectDetector:
     
     def handle_trigger(self, zone, detection, snapshot=None):
         """Handle trigger actions based on global config settings."""
-        Action = self.global_config.get("Action", {})
+        # Load fresh config each time to get latest updates
+        global_config = self._load_global_config()
+        Action = global_config.get("Action", {})
         print(Action)
         
         # Check desktopPush
@@ -183,34 +192,49 @@ class ObjectDetector:
     
     def check_objects_in_zones(self, tracked_objects, zone_manager):
         """
-        Check if objects are in zones and collect trigger events.
+        Check if objects are in zones and collect trigger events based on state changes.
+        Uses enter/exit rules instead of cooldown timers.
         DOES NOT execute triggers - returns them for later execution after frame annotation.
         """
         zone_manager.reset_triggers()
 
         triggered_zones = set()
         trigger_events = []  # Collect triggers to execute later
+        current_states = {}  # Track current frame's states
 
         for zone in zone_manager.zones:
+            rule = zone.get("rule", "").lower()  # "enter", "exit", or ""
+            
             for detection in tracked_objects:
                 in_zone = zone_manager._is_point_in_coordinates(detection["center"], zone["coordinates"])
+                
                 if in_zone and zone_manager.zone_matches_label(zone, detection["label"]):
                     zone_manager.set_zone_triggered(zone["id"], True)
                     triggered_zones.add(zone["id"])
-                    trigger_key = (zone["id"], detection["track_id"])
-                    now = time.time()
-                    last_time = self.last_trigger_times.get(trigger_key, 0)
-
-                    # Allow one trigger per object per zone within the cooldown window.
-                    if now - last_time >= self.trigger_cooldown_seconds:
-                        self.last_trigger_times[trigger_key] = now
-                        action_text = zone.get("onTrigger", "No action defined")
+                    
+                    state_key = (zone["id"], detection["track_id"])
+                    previous_state = self.zone_object_states.get(state_key, False)
+                    current_states[state_key] = True
+                    
+                    # Trigger on state transitions based on rule
+                    should_trigger = False
+                    if rule == "enter" and not previous_state and in_zone:
+                        # Object just entered the zone
+                        should_trigger = True
+                        trigger_reason = "entered"
+                    elif rule == "exit":
+                        # Will handle exit triggers below after processing all objects
+                        pass
+                    elif rule == "":
+                        # No rule specified, trigger every frame (legacy behavior)
+                        should_trigger = True
+                    
+                    if should_trigger:
+                        now = time.time()
                         print(
-                            f"Zone '{zone['name']}' triggered by {detection['label']} "
-                            f"(ID: {detection['track_id']}), {action_text}"
+                            f"Zone '{zone['name']}' {trigger_reason} by {detection['label']} "
+                            f"(ID: {detection['track_id']})"
                         )
-                        
-                        # Collect trigger event instead of executing immediately
                         trigger_events.append({
                             "zone": zone,
                             "detection": detection,
@@ -218,6 +242,45 @@ class ObjectDetector:
                         })
                     
                     break
+
+        # Handle exit triggers - check for objects that were in zone but are no longer there
+        for state_key, was_in_zone in list(self.zone_object_states.items()):
+            if was_in_zone and state_key not in current_states:
+                # Object was in zone previously but is not in current_states
+                zone_id, track_id = state_key
+                zone = next((z for z in zone_manager.zones if z["id"] == zone_id), None)
+                
+                if zone:
+                    rule = zone.get("rule", "").lower()
+                    if rule == "exit":
+                        # Find the detection to get label for logging
+                        detection = next(
+                            (d for d in tracked_objects if d["track_id"] == track_id),
+                            None
+                        )
+                        label = detection["label"] if detection else "unknown"
+                        
+                        now = time.time()
+                        print(
+                            f"Zone '{zone['name']}' exited by {label} "
+                            f"(ID: {track_id})"
+                        )
+                        # Create a synthetic detection for exit event
+                        exit_detection = {
+                            "track_id": track_id,
+                            "label": label,
+                            "bbox": (0, 0, 0, 0),
+                            "center": (0, 0),
+                            "confidence": 0.0,
+                        }
+                        trigger_events.append({
+                            "zone": zone,
+                            "detection": exit_detection,
+                            "timestamp": now
+                        })
+        
+        # Update state for next frame
+        self.zone_object_states = current_states
         
         return {
             "any_triggered": len(triggered_zones) > 0,
