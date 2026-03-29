@@ -8,10 +8,9 @@ import threading
 import time
 import cv2
 from main import (
+    EagleEyeRuntime,
     close_runtime,
-    create_runtime,
     get_runtime_status,
-    process_next_frame,
     run_loop_in_thread,
 )
 
@@ -147,14 +146,7 @@ def initialize(
             runtime = None
 
         stop_event = threading.Event()
-        runtime = create_runtime(
-            model_path=model_path,
-            confidence=confidence,
-            zone_config_path=zone_config_path,
-            video_source=video_source,
-            frame_skip=frame_skip,
-            show_window=show_window,
-        )
+        runtime = EagleEyeRuntime()
         if runtime is None:
             return {"status": "error", "message": "Could not initialize video source"}
 
@@ -168,9 +160,12 @@ def start():
             return {"status": "already running"}
 
         if runtime is None:
-            runtime = create_runtime(show_window=False)
+            runtime = EagleEyeRuntime()
+            runtime.show_window = False
             if runtime is None:
-                runtime = create_runtime(video_source="0", show_window=False)
+                runtime = EagleEyeRuntime()
+                runtime.show_window = False
+                runtime.video_source = 0
             if runtime is None:
                 return {"status": "error", "message": "Could not initialize video source (file and webcam fallback failed)"}
 
@@ -224,14 +219,10 @@ def start_monitoring(payload: StartMonitoringPayload):
         # Initialize runtime with the provided video source
         print(f"[start_monitoring] Initializing runtime with video_source: {payload.video_source}")
         stop_event = threading.Event()
-        runtime = create_runtime(
-            model_path="yolov8n.pt",
-            confidence=confidence,
-            zone_config_path="config/zone_config.json",
-            video_source=payload.video_source,
-            frame_skip=frame_skip,
-            show_window=False,
-        )
+        runtime = EagleEyeRuntime(cap = cv2.VideoCapture(payload.video_source))
+        runtime.frame_skip = frame_skip
+        runtime.confidence_threshold = confidence
+        runtime.detector.confidence = confidence
         
         if runtime is None:
             error_msg = f"Could not initialize video source: {payload.video_source}"
@@ -251,26 +242,6 @@ def start_monitoring(payload: StartMonitoringPayload):
         print(f"[start_monitoring] SUCCESS: Runtime started with status: {status}")
         return {"status": "started", "video_source": payload.video_source, "runtime": status}
 
-
-@app.post("/step")
-def step():
-    global runtime, worker_thread
-    with runtime_lock:
-        if worker_thread is not None and worker_thread.is_alive():
-            return {"status": "error", "message": "Cannot step while loop is running"}
-
-        if runtime is None:
-            runtime = create_runtime(show_window=False)
-            if runtime is None:
-                runtime = create_runtime(video_source="0", show_window=False)
-            if runtime is None:
-                return {"status": "error", "message": "Could not initialize video source (file and webcam fallback failed)"}
-
-        can_continue = process_next_frame(runtime)
-        return {
-            "status": "ok" if can_continue else "ended",
-            "runtime": get_runtime_status(runtime),
-        }
 
 @app.post("/stop")
 def stop():
@@ -310,16 +281,6 @@ def clear_zones():
         runtime.zone_manager.clear_all_zones()
         return {"status": "zones cleared from runtime and file"}
 
-
-@app.get("/status")
-def status():
-    global runtime, worker_thread
-    with runtime_lock:
-        return {
-            "initialized": runtime is not None,
-            "running": worker_thread is not None and worker_thread.is_alive(),
-            "runtime": get_runtime_status(runtime) if runtime is not None else None,
-        }
 
 
 # ---------- Zone management ----------

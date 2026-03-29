@@ -1,9 +1,9 @@
 [
     {
-        "frameSkip": 2,
-        "confidenceThreshold": 0.5,
+        "frameSkip": 1,
+        "confidenceThreshold": 0.21,
         "Action": {
-            "desktopPush": true,
+            "desktopPush": false,
             "emailDigest": null,
             "saveSnapshotLocally": false,
             "SMS": null,

@@ -1,3 +1,4 @@
+from asyncio.windows_events import NULL
 import json
 import cv2
 import threading
@@ -18,103 +19,30 @@ def load_global_config():
         print(f"[WARNING] Failed to load global config: {e}")
         return {"frameSkip": 5, "confidenceThreshold": 0.3, "Action": {}}
 
-# Load defaults - used only if not explicitly provided
-_default_config = load_global_config()
-FRAME_SKIP = _default_config.get("frameSkip", 5)
-CONFIDENCE_THRESHOLD = _default_config.get("confidenceThreshold", 0.3)
-ACTION = _default_config.get("Action", {})
 
 class EagleEyeRuntime:
     """Holds runtime state for the detection loop."""
 
     def __init__(
         self,
-        detector,
-        zone_manager,
-        cap,
-        frame_skip=FRAME_SKIP,
-        confidence_threshold=CONFIDENCE_THRESHOLD,
-        window_name="EagleEye Detection",
-        show_window=True,
-        snapshot_dir="uploads",
+        cap
     ):
-        self.detector = detector
-        self.zone_manager = zone_manager
+        self.detector = ObjectDetector(model_path="yolov8n.pt", confidence=0.3)
+        self.zone_manager = ZoneManager(config_path="config/zone_config.json")
         self.cap = cap
-        self.frame_skip = frame_skip
-        self.confidence_threshold = confidence_threshold
-        self.window_name = window_name
-        self.show_window = show_window
-        self.snapshot_dir = snapshot_dir
+        self.frame_skip = 5
+        self.confidence_threshold = 0.3
+        self.window_name = "EagleEye Detection"
+        self.show_window = True
+        self.snapshot_dir = "uploads"
         self.frame_index = 0
         self.tracked_objects = []
         self.last_zone_triggered = False
         self.latest_annotated_frame = None
-        self.last_trigger_events = []  # Store trigger events until they're executed
+        self.last_trigger_events = []
+        self.videoSource = 0  # Store trigger events until they're executed
 
 
-def create_runtime(
-    model_path="yolov8n.pt",
-    confidence=CONFIDENCE_THRESHOLD,
-    zone_config_path="config/zone_config.json",
-    video_source="videos/guyParkingCar.mp4",
-    frame_skip=FRAME_SKIP,
-    show_window=True,
-    window_name="EagleEye Detection",
-    snapshot_dir="uploads",
-):
-    """Create and initialize all components needed for processing."""
-    detector = ObjectDetector(model_path=model_path, confidence=confidence)
-    zone_manager = ZoneManager(config_path=zone_config_path)
-
-    # Ensure snapshot directory exists
-    if not os.path.exists(snapshot_dir):
-        os.makedirs(snapshot_dir)
-
-    resolved_video_source = video_source
-    if isinstance(video_source, str) and video_source.strip() != "":
-        if video_source.isdigit():
-            resolved_video_source = int(video_source)
-        else:
-            # Try common path roots so running from backend/ or repo root both work.
-            backend_dir = os.path.dirname(os.path.abspath(__file__))
-            repo_root = os.path.dirname(backend_dir)
-            candidate_paths = [
-                video_source,
-                os.path.join(repo_root, video_source),
-                os.path.join(backend_dir, video_source),
-                os.path.join(repo_root, "videos", os.path.basename(video_source)),
-            ]
-            for candidate in candidate_paths:
-                if os.path.exists(candidate):
-                    resolved_video_source = candidate
-                    break
-
-    cap = cv2.VideoCapture(resolved_video_source)
-
-    if not cap.isOpened():
-        print(f"Could not open video source: {resolved_video_source}")
-        return None
-
-    runtime = EagleEyeRuntime(
-        detector=detector,
-        zone_manager=zone_manager,
-        cap=cap,
-        frame_skip=frame_skip,
-        window_name=window_name,
-        show_window=show_window,
-        snapshot_dir=snapshot_dir,
-    )
-
-    if show_window:
-        cv2.namedWindow(window_name)
-        cv2.setMouseCallback(window_name, zone_manager.mouse_callback)
-        print(
-            "EagleEye started. Left-click points to draw polygon, "
-            "click first point again to close. Press Esc to cancel draft polygon."
-        )
-
-    return runtime
 
 
 def process_next_frame(runtime):
@@ -154,9 +82,6 @@ def process_next_frame(runtime):
         snapshot_path = save_snapshot(annotated_frame, runtime.snapshot_dir)
         if snapshot_path:
             runtime.detector.execute_trigger_events(runtime.last_trigger_events, snapshot_path)
-
-    if runtime.show_window:
-        cv2.imshow(runtime.window_name, annotated_frame)
 
     return True
 
@@ -226,6 +151,7 @@ def get_runtime_status(runtime):
     """Return a lightweight runtime status dictionary."""
     triggered_count = sum(1 for z in runtime.zone_manager.zones if z["triggered"])
     return {
+        "frame_skip": runtime.frame_skip,
         "frame_index": runtime.frame_index,
         "zone_count": len(runtime.zone_manager.zones),
         "triggered_count": triggered_count,
@@ -243,18 +169,6 @@ def run_loop_in_thread(runtime, stop_event):
         close_runtime(runtime)
 
 
-def main():
-    """Main application loop"""
-    runtime = create_runtime(show_window=True)
-    if runtime is None:
-        return
-
-    stop_event = threading.Event()
-    try:
-        run_loop(runtime, stop_event=stop_event)
-    finally:
-        close_runtime(runtime)
-
 
 def draw_ui(frame, zone_manager, any_zone_triggered):
     # """Draw UI elements on frame"""
@@ -269,7 +183,3 @@ def draw_ui(frame, zone_manager, any_zone_triggered):
     status = f"Zones: {zone_count} | Triggered: {triggered_count}"
     cv2.putText(frame, status, (10, 60), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-
-if __name__ == "__main__":
-    main()
