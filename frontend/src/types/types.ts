@@ -76,7 +76,8 @@ export type ZoneTriggerType =
 
 export interface ZoneRule {
   trigger: ZoneTriggerType;
-  objectClass: ObjectClass | "any";
+  /** COCO names (lowercase, as YOLO emits). Empty = match any class. */
+  objectClasses: string[];
   dwellTime?: number;
   severity: AlertSeverity;
 }

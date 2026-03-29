@@ -34,7 +34,7 @@ export async function saveZone(zone: Zone): Promise<void> {
       zone_id: zone.id,
       zone_name: zone.name,
       description: "Detection zone",
-      trigger: zone.rule.objectClass === "any" ? "person" : zone.rule.objectClass,
+      trigger: zone.rule.objectClasses,
       coordinates: zone.polygon.map((p) => [p.x, p.y]),
       rule: zone.rule.trigger,
       severity: zone.rule.severity,

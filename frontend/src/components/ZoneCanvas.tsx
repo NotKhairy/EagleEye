@@ -160,7 +160,7 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
       name: `Zone ${zones.length + 1}`,
       color,
       polygon: [...draftPoints],
-      rule: { trigger: "dwell", objectClass: "any", dwellTime: 10, severity: "info" },
+      rule: { trigger: "dwell", objectClasses: ["person"], dwellTime: 10, severity: "info" },
     };
     setZones((prev) => [...prev, newZone]);
     setSelectedZoneId(newZone.id);

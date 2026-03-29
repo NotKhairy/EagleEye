@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Union
 import json
 import os
 import threading
@@ -328,7 +328,8 @@ class ZonePayload(BaseModel):
     zone_id: str
     zone_name: str
     description: str = "Detection zone"
-    trigger: str = "person"
+    # COCO class name(s): string (legacy) or list for multiple trigger objects
+    trigger: Union[str, List[str]] = "person"
     coordinates: List[List[float]]
     rule: str = "dwell"
     severity: str = "info"

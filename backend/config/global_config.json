@@ -4,7 +4,7 @@
         "confidenceThreshold": 0.5,
         "Action": {
             "desktopPush": true,
-            "emailDigest": "ahany963963@gmail.com",
+            "emailDigest": null,
             "saveSnapshotLocally": false,
             "SMS": null,
             "Call": null

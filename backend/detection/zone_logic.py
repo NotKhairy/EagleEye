@@ -43,7 +43,13 @@ class ZoneManager:
         """Save all zones to config file"""
         config = []
         for i, zone in enumerate(self.zones):
-            trigger_value = zone["trigger"][0] if len(zone["trigger"]) == 1 else zone["trigger"]
+            trig = zone["trigger"]
+            if len(trig) == 0:
+                trigger_value = []
+            elif len(trig) == 1:
+                trigger_value = trig[0]
+            else:
+                trigger_value = trig
             config.append({
                 "zone_name": zone["name"],
                 "zone_id": zone["id"],
@@ -164,22 +170,48 @@ class ZoneManager:
         return math.hypot(x2 - x1, y2 - y1) <= self.close_distance
 
     def _normalize_trigger(self, trigger):
-        """Normalize trigger config into a lowercase label list."""
+        """Normalize trigger to a lowercase label list. Empty list = match any class."""
+        original = trigger
         if isinstance(trigger, list):
+            if len(trigger) == 0:
+                return []
             values = trigger
         elif isinstance(trigger, str):
-            # Accept formats like "Phone, Person" and "Phone and Person".
+            t = trigger.strip().lower()
+            if t in ("any", "*", "all"):
+                return []
             prepared = trigger.replace(" and ", ",")
             values = [part.strip() for part in prepared.split(",")]
         else:
             values = []
 
-        normalized = [value.lower() for value in values if value and value.strip()]
-        return normalized or ["person"]
+        normalized = [
+            str(value).lower().strip()
+            for value in values
+            if value is not None and str(value).strip()
+        ]
+        seen = set()
+        unique = []
+        for label in normalized:
+            if label in ("any", "*", "all"):
+                return []
+            if label not in seen:
+                seen.add(label)
+                unique.append(label)
+
+        if not unique:
+            if isinstance(original, list):
+                return []
+            return ["person"]
+
+        return unique
 
     def zone_matches_label(self, zone, label):
         """Check whether a zone should trigger for a given detected label."""
-        return label.lower() in zone["trigger"]
+        triggers = zone["trigger"]
+        if not triggers:
+            return True
+        return label.lower() in triggers
     
     def check_point_in_zones(self, point):
         """Check which zones contain the point and update triggered status"""
@@ -214,7 +246,7 @@ class ZoneManager:
             cv2.polylines(frame, [contour], True, color, 2)
             
             # Draw zone label
-            trigger_text = "/".join(zone["trigger"])
+            trigger_text = "/".join(zone["trigger"]) if zone["trigger"] else "any"
             label = f"{zone['name']} ({trigger_text})"
             label_pos = (polygon[0][0] + 5, polygon[0][1] - 8)
             cv2.putText(frame, label, label_pos, cv2.FONT_HERSHEY_SIMPLEX, 

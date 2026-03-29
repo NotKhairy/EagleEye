@@ -1,25 +1,28 @@
 [
     {
         "zone_name": "Zone 1",
-        "zone_id": "zone-1774321752721",
+        "zone_id": "zone-1774782060030",
         "description": "Detection zone",
-        "trigger": "person",
+        "trigger": [
+            "person",
+            "cell phone"
+        ],
         "coordinates": [
             [
-                169.0,
-                136.0
+                260.0,
+                193.0
             ],
             [
-                454.0,
-                141.0
+                555.0,
+                193.0
             ],
             [
-                422.0,
-                458.0
+                542.0,
+                465.0
             ],
             [
-                111.0,
-                441.0
+                255.0,
+                469.0
             ]
         ],
         "rule": "enter",

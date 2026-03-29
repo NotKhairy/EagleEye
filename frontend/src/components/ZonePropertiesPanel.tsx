@@ -1,4 +1,5 @@
-import type { AlertSeverity, ObjectClass, Zone, ZoneTriggerType } from "../types/types";
+import { COCO_CLASS_NAMES, formatCocoLabel } from "../constants/cocoClasses";
+import type { AlertSeverity, Zone, ZoneTriggerType } from "../types/types";
 
 type ZonePropertiesPanelProps = {
   isOpen: boolean;
@@ -7,17 +8,6 @@ type ZonePropertiesPanelProps = {
   onChange: (zone: Zone) => void;
   onSave: (zone: Zone) => Promise<void>;
 };
-
-const objectOptions: Array<{ value: ObjectClass | "any"; label: string }> = [
-  { value: "any", label: "Any Object" },
-  { value: "person", label: "Person" },
-  { value: "car", label: "Car" },
-  { value: "bicycle", label: "Bicycle" },
-  { value: "motorcycle", label: "Motorcycle" },
-  { value: "bus", label: "Bus" },
-  { value: "truck", label: "Truck" },
-  { value: "package", label: "Package" },
-];
 
 const ruleOptions: Array<{ value: ZoneTriggerType; label: string }> = [
   { value: "enter", label: "Enter Zone" },
@@ -61,23 +51,92 @@ export default function ZonePropertiesPanel({
           </div>
 
           <div>
-            <label className="text-xs text-gray-400">TRIGGER OBJECT</label>
+            <label className="text-xs text-gray-400">TRIGGER OBJECTS</label>
+            <p className="mt-1 text-xs text-gray-500">
+              COCO classes (YOLO default), or match any class when nothing is selected.
+            </p>
+
+            <label className="mt-2 flex cursor-pointer items-start gap-2 text-sm text-gray-300">
+              <input
+                type="checkbox"
+                className="mt-1 rounded border-gray-600"
+                checked={zone.rule.objectClasses.length === 0}
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    onChange({
+                      ...zone,
+                      rule: { ...zone.rule, objectClasses: [] },
+                    });
+                  } else {
+                    onChange({
+                      ...zone,
+                      rule: { ...zone.rule, objectClasses: ["person"] },
+                    });
+                  }
+                }}
+              />
+              <span>
+                <span className="font-medium text-gray-200">Match any object</span>
+                <span className="block text-xs font-normal text-gray-500">
+                  Zone triggers for every detection class (empty list on the backend).
+                </span>
+              </span>
+            </label>
+
+            {zone.rule.objectClasses.length > 0 ? (
+              <ul className="mt-2 flex max-h-24 flex-wrap gap-2 overflow-y-auto">
+                {zone.rule.objectClasses.map((cls) => (
+                  <li
+                    key={cls}
+                    className="flex items-center gap-0.5 rounded-full border border-gray-600 bg-black/60 pl-2 pr-0.5 text-xs text-gray-200"
+                  >
+                    <span>{formatCocoLabel(cls)}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${cls}`}
+                      className="rounded px-1.5 py-0.5 text-gray-400 hover:bg-gray-800 hover:text-white"
+                      onClick={() => {
+                        const next = zone.rule.objectClasses.filter((c) => c !== cls);
+                        onChange({
+                          ...zone,
+                          rule: { ...zone.rule, objectClasses: next },
+                        });
+                      }}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs text-gray-500">
+                Use the list below if you only want certain classes; the first selection switches off
+                &quot;match any&quot;.
+              </p>
+            )}
+
             <select
-              className="mt-1 w-full rounded border border-gray-700 bg-black p-2 text-sm"
-              value={zone.rule.objectClass}
-              onChange={(event) =>
+              key={zone.rule.objectClasses.join("|")}
+              className="mt-2 w-full rounded border border-gray-700 bg-black p-2 text-sm"
+              defaultValue=""
+              onChange={(event) => {
+                const v = event.target.value;
+                if (!v || zone.rule.objectClasses.includes(v)) return;
                 onChange({
                   ...zone,
                   rule: {
                     ...zone.rule,
-                    objectClass: event.target.value as ObjectClass | "any",
+                    objectClasses: [...zone.rule.objectClasses, v],
                   },
-                })
-              }
+                });
+              }}
             >
-              {objectOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
+              <option value="" disabled>
+                Add class…
+              </option>
+              {COCO_CLASS_NAMES.filter((name) => !zone.rule.objectClasses.includes(name)).map((name) => (
+                <option key={name} value={name}>
+                  {formatCocoLabel(name)}
                 </option>
               ))}
             </select>
