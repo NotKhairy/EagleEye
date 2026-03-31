@@ -7,7 +7,7 @@
     "kill": "fuser -k 8000/tcp || true",
     "dev": "concurrently -k -n FRONTEND,BACKEND -c blue,green \"npm run frontend\" \"npm run backend\"",
     "frontend": "cd frontend && npm run dev",
-    "backend": "cd backend && ../venv/bin/python -m uvicorn api:app --host 127.0.0.1 --port 8000"
+    "backend": "cd backend && python -m uvicorn api:app --host 127.0.0.1 --port 8000"
   },
   "repository": {
     "type": "git",

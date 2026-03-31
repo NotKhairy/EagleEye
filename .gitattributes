@@ -1,0 +1,21 @@
+* text=auto eol=lf
+
+#Shell scripts (linux)
+*.sh text eol=lf
+
+#Windows scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+#Python
+*.py text eol=lf
+
+#JS/TS/JSON
+*.js text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
+
+#Prevent issues with node + venv
+node_modules/ -text
+venv/ -text
+
