@@ -34,6 +34,7 @@ class ZoneManager:
                                 "coordinates": polygon,
                                 "rule": zone_data.get("rule", ""),
                                 "severity": zone_data.get("severity", ""),
+                                "personIdentity": zone_data.get("personIdentity"),
                                 "triggered": False
                             })
         except:

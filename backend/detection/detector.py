@@ -190,7 +190,7 @@ class ObjectDetector:
             )
         return annotated
     
-    def check_objects_in_zones(self, tracked_objects, zone_manager):
+    def check_objects_in_zones(self, tracked_objects, zone_manager, frame=None, face_recognizer=None):
         """
         Check if objects are in zones and collect trigger events based on state changes.
         Uses enter/exit rules instead of cooldown timers.
@@ -204,6 +204,7 @@ class ObjectDetector:
 
         for zone in zone_manager.zones:
             rule = zone.get("rule", "").lower()  # "enter", "exit", or ""
+            identity_rule = zone.get("personIdentity") or None
             
             for detection in tracked_objects:
                 in_zone = zone_manager._is_point_in_coordinates(detection["center"], zone["coordinates"])
@@ -230,6 +231,36 @@ class ObjectDetector:
                         should_trigger = True
                     
                     if should_trigger:
+                        # Optional identity filter (only applies when zone triggers for person)
+                        if (
+                            identity_rule
+                            and detection.get("label", "").lower() == "person"
+                            and frame is not None
+                            and face_recognizer is not None
+                        ):
+                            mode = str(identity_rule.get("mode", "")).lower()
+                            allowed_ids = set(identity_rule.get("personIds") or [])
+                            if mode in ("whitelist", "blacklist") and allowed_ids:
+                                x1, y1, x2, y2 = detection.get("bbox", (0, 0, 0, 0))
+                                x1, y1 = max(0, int(x1)), max(0, int(y1))
+                                x2, y2 = int(x2), int(y2)
+                                crop = frame[y1:y2, x1:x2] if y2 > y1 and x2 > x1 else None
+                                match = face_recognizer.identify_bgr(crop) if crop is not None else None
+                                matched_id = match.person_id if match else None
+                                detection = {**detection}
+                                detection["face_person_id"] = matched_id
+                                detection["face_person_name"] = match.person_name if match else None
+                                detection["face_distance"] = float(match.distance) if match else None
+
+                                if mode == "whitelist":
+                                    # Trigger if NOT recognized as one of the allowed people
+                                    if matched_id in allowed_ids:
+                                        should_trigger = False
+                                elif mode == "blacklist":
+                                    # Trigger if recognized as one of the blocked people
+                                    if matched_id not in allowed_ids:
+                                        should_trigger = False
+
                         now = time.time()
                         print(
                             f"Zone '{zone['name']}' {trigger_reason} by {detection['label']} "

@@ -80,6 +80,14 @@ export interface ZoneRule {
   objectClasses: string[];
   dwellTime?: number;
   severity: AlertSeverity;
+  personIdentity?: PersonIdentityRule | null;
+}
+
+export type PersonIdentityMode = "whitelist" | "blacklist";
+
+export interface PersonIdentityRule {
+  mode: PersonIdentityMode;
+  personIds: string[];
 }
 
 

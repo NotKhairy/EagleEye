@@ -1,31 +1,36 @@
 [
     {
         "zone_name": "Zone 1",
-        "zone_id": "zone-1774819582790",
+        "zone_id": "zone-1774871861151",
         "description": "Detection zone",
         "trigger": [
-            "person",
-            "car"
+            "person"
         ],
         "coordinates": [
             [
-                398.0,
-                597.0
+                328.0,
+                198.0
             ],
             [
-                303.0,
-                558.0
+                496.0,
+                197.0
             ],
             [
-                461.0,
-                467.0
+                491.0,
+                469.0
             ],
             [
-                538.0,
-                523.0
+                310.0,
+                466.0
             ]
         ],
         "rule": "enter",
-        "severity": "info"
+        "severity": "info",
+        "personIdentity": {
+            "mode": "blacklist",
+            "personIds": [
+                "41354525-18f2-4f82-8961-98733ed7cbe2"
+            ]
+        }
     }
 ]

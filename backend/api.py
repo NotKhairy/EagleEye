@@ -1,12 +1,14 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal
 import json
 import os
 import threading
 import time
 import cv2
+import shutil
+from uuid import uuid4
 from main import (
     EagleEyeRuntime,
     close_runtime,
@@ -22,6 +24,36 @@ runtime = None
 worker_thread = None
 stop_event = threading.Event()
 runtime_lock = threading.Lock()
+
+# Face recognition globals (lazy init)
+_known_people_store = None
+_face_recognizer = None
+_face_lock = threading.Lock()
+
+
+def _get_face_components():
+    global _known_people_store, _face_recognizer
+    with _face_lock:
+        if _known_people_store is None:
+            from face.storage import KnownPeopleStore
+
+            _known_people_store = KnownPeopleStore(root_dir="known_people")
+        if _face_recognizer is None:
+            from face.recognizer import FaceRecognizer
+
+            # Default threshold is intentionally conservative; tune later.
+            _face_recognizer = FaceRecognizer(_known_people_store, threshold=0.35, min_face_size=60)
+        return _known_people_store, _face_recognizer
+
+
+def _attach_face_to_runtime(rt):
+    try:
+        _, recognizer = _get_face_components()
+        rt.face_recognizer = recognizer
+    except Exception as e:
+        # Keep core detection functional even if face deps aren't installed.
+        print(f"[face] Warning: face recognizer unavailable: {e}")
+        rt.face_recognizer = None
 
 @app.get("/")
 def root():
@@ -146,9 +178,8 @@ def initialize(
             runtime = None
 
         stop_event = threading.Event()
-        runtime = EagleEyeRuntime()
-        if runtime is None:
-            return {"status": "error", "message": "Could not initialize video source"}
+        runtime = EagleEyeRuntime(cap=cv2.VideoCapture(video_source))
+        _attach_face_to_runtime(runtime)
 
         return {"status": "initialized", "runtime": get_runtime_status(runtime)}
 
@@ -160,10 +191,12 @@ def start():
             return {"status": "already running"}
 
         if runtime is None:
-            runtime = EagleEyeRuntime()
+            runtime = EagleEyeRuntime(cap=cv2.VideoCapture(0))
+            _attach_face_to_runtime(runtime)
             runtime.show_window = False
             if runtime is None:
-                runtime = EagleEyeRuntime()
+                runtime = EagleEyeRuntime(cap=cv2.VideoCapture(0))
+                _attach_face_to_runtime(runtime)
                 runtime.show_window = False
                 runtime.video_source = 0
             if runtime is None:
@@ -219,7 +252,10 @@ def start_monitoring(payload: StartMonitoringPayload):
         # Initialize runtime with the provided video source
         print(f"[start_monitoring] Initializing runtime with video_source: {payload.video_source}")
         stop_event = threading.Event()
-        runtime = EagleEyeRuntime(cap = cv2.VideoCapture(payload.video_source))
+        if payload.video_source == "0":
+            payload.video_source = 0
+        runtime = EagleEyeRuntime(cap=cv2.VideoCapture(payload.video_source))
+        _attach_face_to_runtime(runtime)
         runtime.frame_skip = frame_skip
         runtime.confidence_threshold = confidence
         runtime.detector.confidence = confidence
@@ -285,6 +321,11 @@ def clear_zones():
 
 # ---------- Zone management ----------
 
+class PersonIdentityPayload(BaseModel):
+    mode: Literal["whitelist", "blacklist"]
+    personIds: List[str]
+
+
 class ZonePayload(BaseModel):
     zone_id: str
     zone_name: str
@@ -294,6 +335,7 @@ class ZonePayload(BaseModel):
     coordinates: List[List[float]]
     rule: str = "dwell"
     severity: str = "info"
+    personIdentity: Optional[PersonIdentityPayload] = None
 
 
 DEFAULT_ZONE_CONFIG = "config/zone_config.json"
@@ -337,6 +379,7 @@ def add_zone(payload: ZonePayload):
         "coordinates": payload.coordinates,
         "rule": payload.rule,
         "severity": payload.severity,
+        "personIdentity": payload.personIdentity.model_dump() if payload.personIdentity else None,
     })
 
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
@@ -349,6 +392,74 @@ def add_zone(payload: ZonePayload):
             runtime.zone_manager.load_zones()
 
     return {"status": "saved", "zone_id": payload.zone_id}
+
+
+# ---------- Known people / enrollment ----------
+
+class PersonCreatePayload(BaseModel):
+    name: str
+
+
+class PersonResponse(BaseModel):
+    id: str
+    name: str
+
+
+@app.get("/people", response_model=List[PersonResponse])
+def list_people():
+    store, _ = _get_face_components()
+    return [PersonResponse(id=p.id, name=p.name) for p in store.list_people()]
+
+
+@app.post("/people", response_model=PersonResponse)
+def create_person(payload: PersonCreatePayload):
+    store, _ = _get_face_components()
+    person = store.create_person(payload.name)
+    return PersonResponse(id=person.id, name=person.name)
+
+
+@app.delete("/people/{person_id}")
+def delete_person(person_id: str):
+    store, recognizer = _get_face_components()
+    ok = store.delete_person(person_id)
+    recognizer.reload_known()
+    if not ok:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return {"status": "deleted", "person_id": person_id}
+
+
+@app.post("/people/{person_id}/images")
+async def upload_person_images(person_id: str, files: List[UploadFile] = File(...)):
+    """
+    Upload one or more reference images for a person and enroll them into embeddings.
+    """
+    store, recognizer = _get_face_components()
+    if store.get_person(person_id) is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    images_dir = store.images_dir(person_id)
+    os.makedirs(images_dir, exist_ok=True)
+
+    saved_paths: List[str] = []
+    for f in files:
+        ext = os.path.splitext(f.filename or "")[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            ext = ".jpg"
+        out_name = f"{uuid4().hex}{ext}"
+        out_path = os.path.join(images_dir, out_name)
+        with open(out_path, "wb") as out:
+            shutil.copyfileobj(f.file, out)
+        saved_paths.append(out_path)
+
+    from face.enroll import enroll_images_for_person
+
+    processed, added = enroll_images_for_person(
+        person_id=person_id,
+        image_paths=saved_paths,
+        known_store=store,
+        face_recognizer=recognizer,
+    )
+    return {"status": "enrolled", "processed_images": processed, "embeddings_added": added}
 
 
 @app.delete("/zones/{zone_id}")

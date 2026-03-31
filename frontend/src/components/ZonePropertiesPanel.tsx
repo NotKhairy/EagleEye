@@ -1,5 +1,7 @@
+import { useEffect, useMemo, useState } from "react";
 import { COCO_CLASS_NAMES, formatCocoLabel } from "../constants/cocoClasses";
-import type { AlertSeverity, Zone, ZoneTriggerType } from "../types/types";
+import { createPerson, listPeople, uploadPersonImages, type KnownPerson } from "../services/api";
+import type { AlertSeverity, PersonIdentityMode, Zone, ZoneTriggerType } from "../types/types";
 
 type ZonePropertiesPanelProps = {
   isOpen: boolean;
@@ -31,6 +33,40 @@ export default function ZonePropertiesPanel({
   if (!isOpen || !zone) {
     return null;
   }
+
+  const personLogicEnabled = zone.rule.objectClasses.includes("person");
+  const [people, setPeople] = useState<KnownPerson[]>([]);
+  const [peopleError, setPeopleError] = useState<string | null>(null);
+  const [loadingPeople, setLoadingPeople] = useState(false);
+  const [newPersonName, setNewPersonName] = useState("");
+  const [uploadingForPersonId, setUploadingForPersonId] = useState<string | null>(null);
+
+  const selectedIdentity = zone.rule.personIdentity ?? null;
+  const selectedIds = useMemo(() => new Set(selectedIdentity?.personIds ?? []), [selectedIdentity]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!personLogicEnabled) return;
+    let cancelled = false;
+    setLoadingPeople(true);
+    setPeopleError(null);
+    listPeople()
+      .then((data) => {
+        if (cancelled) return;
+        setPeople(data);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setPeopleError(e instanceof Error ? e.message : "Failed to load people");
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingPeople(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, personLogicEnabled]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
@@ -97,9 +133,14 @@ export default function ZonePropertiesPanel({
                       className="rounded px-1.5 py-0.5 text-gray-400 hover:bg-gray-800 hover:text-white"
                       onClick={() => {
                         const next = zone.rule.objectClasses.filter((c) => c !== cls);
+                        const shouldClearPersonIdentity = cls === "person" && !next.includes("person");
                         onChange({
                           ...zone,
-                          rule: { ...zone.rule, objectClasses: next },
+                          rule: {
+                            ...zone.rule,
+                            objectClasses: next,
+                            personIdentity: shouldClearPersonIdentity ? null : zone.rule.personIdentity ?? null,
+                          },
                         });
                       }}
                     >
@@ -127,6 +168,7 @@ export default function ZonePropertiesPanel({
                   rule: {
                     ...zone.rule,
                     objectClasses: [...zone.rule.objectClasses, v],
+                    personIdentity: zone.rule.personIdentity ?? null,
                   },
                 });
               }}
@@ -141,6 +183,133 @@ export default function ZonePropertiesPanel({
               ))}
             </select>
           </div>
+
+          {personLogicEnabled && (
+            <div>
+              <label className="text-xs text-gray-400">PERSON IDENTITY</label>
+              <p className="mt-1 text-xs text-gray-500">
+                Choose whitelist/blacklist first, then enroll/select people. Unknown faces are treated as “not in list”.
+              </p>
+
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {(["whitelist", "blacklist"] as PersonIdentityMode[]).map((mode) => {
+                  const selected = selectedIdentity?.mode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`rounded border px-3 py-2 text-xs font-semibold ${
+                        selected ? "border-blue-500 bg-blue-600 text-white" : "border-gray-700 bg-black text-gray-200"
+                      }`}
+                      onClick={() => {
+                        onChange({
+                          ...zone,
+                          rule: {
+                            ...zone.rule,
+                            personIdentity: { mode, personIds: selectedIdentity?.personIds ?? [] },
+                          },
+                        });
+                      }}
+                    >
+                      {mode === "whitelist" ? "Whitelist (allowed)" : "Blacklist (blocked)"}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedIdentity ? (
+                <div className="mt-3 rounded border border-gray-700 bg-black/40 p-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="flex-1 rounded border border-gray-700 bg-black p-2 text-sm"
+                      placeholder="Create person (name)"
+                      value={newPersonName}
+                      onChange={(e) => setNewPersonName(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="rounded bg-[#151B22] px-3 py-2 text-sm text-gray-200 hover:bg-gray-800 disabled:opacity-50"
+                      disabled={!newPersonName.trim()}
+                      onClick={async () => {
+                        const name = newPersonName.trim();
+                        if (!name) return;
+                        const created = await createPerson(name);
+                        setPeople((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+                        setNewPersonName("");
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-400">SELECT PEOPLE</span>
+                      {loadingPeople ? (
+                        <span className="text-xs text-gray-500">Loading…</span>
+                      ) : peopleError ? (
+                        <span className="text-xs text-red-400">{peopleError}</span>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-2 max-h-32 space-y-2 overflow-y-auto">
+                      {people.length === 0 ? (
+                        <p className="text-xs text-gray-500">No enrolled people yet. Create one above, then upload photos.</p>
+                      ) : (
+                        people.map((p) => {
+                          const checked = selectedIds.has(p.id);
+                          return (
+                            <div key={p.id} className="flex items-center justify-between gap-2">
+                              <label className="flex items-center gap-2 text-sm text-gray-200">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    const nextIds = new Set(selectedIds);
+                                    if (e.target.checked) nextIds.add(p.id);
+                                    else nextIds.delete(p.id);
+                                    onChange({
+                                      ...zone,
+                                      rule: {
+                                        ...zone.rule,
+                                        personIdentity: { ...selectedIdentity, personIds: Array.from(nextIds) },
+                                      },
+                                    });
+                                  }}
+                                />
+                                <span>{p.name}</span>
+                              </label>
+
+                              <input
+                                type="file"
+                                multiple
+                                accept="image/*"
+                                className="text-xs text-gray-400"
+                                disabled={uploadingForPersonId === p.id}
+                                onChange={async (e) => {
+                                  const files = Array.from(e.target.files ?? []);
+                                  if (files.length === 0) return;
+                                  setUploadingForPersonId(p.id);
+                                  try {
+                                    await uploadPersonImages(p.id, files);
+                                  } finally {
+                                    setUploadingForPersonId(null);
+                                    e.currentTarget.value = "";
+                                  }
+                                }}
+                              />
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-gray-500">Select whitelist or blacklist to enable person identity rules.</p>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="text-xs text-gray-400">ACTIVE RULE</label>
