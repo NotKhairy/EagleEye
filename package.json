@@ -4,10 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "kill": "powershell -Command \"Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }\"",
+    "kill": "fuser -k 8000/tcp || true",
     "dev": "concurrently -k -n FRONTEND,BACKEND -c blue,green \"npm run frontend\" \"npm run backend\"",
     "frontend": "cd frontend && npm run dev",
-    "backend": "cd backend && ..\\venv\\Scripts\\python.exe -m uvicorn api:app --host 127.0.0.1 --port 8000"
+    "backend": "cd backend && ../venv/bin/python -m uvicorn api:app --host 127.0.0.1 --port 8000"
   },
   "repository": {
     "type": "git",

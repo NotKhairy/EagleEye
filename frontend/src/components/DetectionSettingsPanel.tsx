@@ -103,7 +103,7 @@ export default function DetectionSettingsPanel({
   };
 
   return (
-    <div className="w-85 h-full min-h-0 overflow-hidden border-r border-gray-800 px-4 py-3 flex flex-col gap-3">
+    <div className="w-85 h-full min-h-0 overflow-y-auto border-r border-gray-800 px-4 py-3 flex flex-col gap-3">
       <div>
         <h2 className="text-base font-semibold">System Configuration</h2>
         <p className="text-xs text-gray-400 leading-4">
