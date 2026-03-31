@@ -3,8 +3,8 @@
         "frameSkip": 2,
         "confidenceThreshold": 0.5,
         "Action": {
-            "desktopPush": false,
-            "emailDigest": "meekosafar@gmail.com",
+            "desktopPush": true,
+            "emailDigest": null,
             "saveSnapshotLocally": false,
             "SMS": null,
             "Call": null

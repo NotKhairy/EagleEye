@@ -38,10 +38,47 @@ export async function saveZone(zone: Zone): Promise<void> {
       coordinates: zone.polygon.map((p) => [p.x, p.y]),
       rule: zone.rule.trigger,
       severity: zone.rule.severity,
+      personIdentity: zone.rule.personIdentity ?? null,
     }),
   });
   if (!response.ok) {
     await throwWithResponse("Failed to save zone", response);
+  }
+}
+
+export type KnownPerson = { id: string; name: string };
+
+export async function listPeople(): Promise<KnownPerson[]> {
+  const response = await fetch(`${API_BASE}/people`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to list people", response);
+  }
+  return (await response.json()) as KnownPerson[];
+}
+
+export async function createPerson(name: string): Promise<KnownPerson> {
+  const response = await fetch(`${API_BASE}/people`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    await throwWithResponse("Failed to create person", response);
+  }
+  return (await response.json()) as KnownPerson;
+}
+
+export async function uploadPersonImages(personId: string, files: File[]): Promise<void> {
+  const formData = new FormData();
+  for (const f of files) {
+    formData.append("files", f);
+  }
+  const response = await fetch(`${API_BASE}/people/${encodeURIComponent(personId)}/images`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    await throwWithResponse("Failed to upload person images", response);
   }
 }
 

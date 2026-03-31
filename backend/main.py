@@ -29,6 +29,7 @@ class EagleEyeRuntime:
         self.detector = ObjectDetector(model_path="yolov8n.pt", confidence=0.3)
         self.zone_manager = ZoneManager(config_path="config/zone_config.json")
         self.cap = cap
+        self.face_recognizer = None
         self.frame_skip = 5
         self.confidence_threshold = 0.3
         self.window_name = "EagleEye Detection"
@@ -67,6 +68,8 @@ def process_next_frame(runtime):
     zone_result = runtime.detector.check_objects_in_zones(
         runtime.tracked_objects,
         runtime.zone_manager,
+        frame=frame,
+        face_recognizer=runtime.face_recognizer,
     )
     runtime.last_zone_triggered = zone_result["any_triggered"]
     runtime.last_trigger_events = zone_result["trigger_events"]
