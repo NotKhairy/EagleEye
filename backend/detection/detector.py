@@ -6,6 +6,32 @@ import time
 import smtplib
 from mailService import MailService
 
+
+def _bgr_face_crop_from_person_bbox(frame, x1, y1, x2, y2):
+    """
+    YOLO person boxes are full-body; faces are usually in the upper band.
+    Crop top ~55% with horizontal padding so MTCNN sees a larger face.
+    """
+    if frame is None or frame.size == 0:
+        return None
+    h, w = frame.shape[:2]
+    x1, y1 = max(0, int(x1)), max(0, int(y1))
+    x2, y2 = min(w, int(x2)), min(h, int(y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    bw = x2 - x1
+    bh = y2 - y1
+    band = max(int(bh * 0.55), int(bw * 0.65))
+    y_face_end = min(y2, y1 + band)
+    pad_x = int(bw * 0.15)
+    fx1 = max(0, x1 - pad_x)
+    fx2 = min(w, x2 + pad_x)
+    crop = frame[y1:y_face_end, fx1:fx2]
+    if crop.size == 0:
+        return None
+    return crop
+
+
 class ObjectDetector:
     """Handles YOLO detection + DeepSORT tracking and object-zone matching."""
 
@@ -242,9 +268,7 @@ class ObjectDetector:
                             allowed_ids = set(identity_rule.get("personIds") or [])
                             if mode in ("whitelist", "blacklist") and allowed_ids:
                                 x1, y1, x2, y2 = detection.get("bbox", (0, 0, 0, 0))
-                                x1, y1 = max(0, int(x1)), max(0, int(y1))
-                                x2, y2 = int(x2), int(y2)
-                                crop = frame[y1:y2, x1:x2] if y2 > y1 and x2 > x1 else None
+                                crop = _bgr_face_crop_from_person_bbox(frame, x1, y1, x2, y2)
                                 match = face_recognizer.identify_bgr(crop) if crop is not None else None
                                 matched_id = match.person_id if match else None
                                 detection = {**detection}
@@ -261,16 +285,25 @@ class ObjectDetector:
                                     if matched_id not in allowed_ids:
                                         should_trigger = False
 
-                        now = time.time()
-                        print(
-                            f"Zone '{zone['name']}' {trigger_reason} by {detection['label']} "
-                            f"(ID: {detection['track_id']})"
-                        )
-                        trigger_events.append({
-                            "zone": zone,
-                            "detection": detection,
-                            "timestamp": now
-                        })
+                                print(
+                                    f"[face] zone={zone.get('name')} mode={mode} "
+                                    f"track={detection.get('track_id')} "
+                                    f"matched_id={matched_id} dist={detection.get('face_distance')} "
+                                    f"trigger_after_identity={should_trigger}"
+                                )
+
+                        # Identity filter may set should_trigger False; only enqueue if still True.
+                        if should_trigger:
+                            now = time.time()
+                            print(
+                                f"Zone '{zone['name']}' {trigger_reason} by {detection['label']} "
+                                f"(ID: {detection['track_id']})"
+                            )
+                            trigger_events.append({
+                                "zone": zone,
+                                "detection": detection,
+                                "timestamp": now
+                            })
                     
                     break
 

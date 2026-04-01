@@ -1,33 +1,34 @@
 [
     {
         "zone_name": "Zone 1",
-        "zone_id": "zone-1774871861151",
+        "zone_id": "zone-1775078899498",
         "description": "Detection zone",
         "trigger": [
-            "person"
+            "person",
+            "cell phone"
         ],
         "coordinates": [
             [
-                328.0,
-                198.0
+                234.0,
+                219.0
             ],
             [
-                496.0,
-                197.0
+                237.0,
+                479.0
             ],
             [
-                491.0,
-                469.0
+                552.0,
+                476.0
             ],
             [
-                310.0,
-                466.0
+                535.0,
+                224.0
             ]
         ],
         "rule": "enter",
         "severity": "info",
         "personIdentity": {
-            "mode": "blacklist",
+            "mode": "whitelist",
             "personIds": [
                 "41354525-18f2-4f82-8961-98733ed7cbe2"
             ]

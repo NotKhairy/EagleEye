@@ -19,6 +19,15 @@ def load_global_config():
         return {"frameSkip": 5, "confidenceThreshold": 0.3, "Action": {}}
 
 
+def _zones_require_face_identity(zone_manager) -> bool:
+    """If true, bboxes must align with the frame used for face crop (avoid frameSkip desync)."""
+    for z in zone_manager.zones:
+        rule = z.get("personIdentity") or {}
+        if rule.get("mode") in ("whitelist", "blacklist") and (rule.get("personIds") or []):
+            return True
+    return False
+
+
 class EagleEyeRuntime:
     """Holds runtime state for the detection loop."""
 
@@ -54,7 +63,9 @@ def process_next_frame(runtime):
     runtime.frame_index += 1
 
     # Perform detection/tracking.
-    if runtime.frame_index % runtime.frame_skip == 0:
+    skip = runtime.frame_skip if runtime.frame_skip >= 1 else 1
+    run_track = (runtime.frame_index % skip == 0) or _zones_require_face_identity(runtime.zone_manager)
+    if run_track:
         runtime.tracked_objects = runtime.detector.track(frame)
 
     annotated_frame = runtime.detector.draw_tracks(

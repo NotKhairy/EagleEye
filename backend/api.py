@@ -41,8 +41,8 @@ def _get_face_components():
         if _face_recognizer is None:
             from face.recognizer import FaceRecognizer
 
-            # Default threshold is intentionally conservative; tune later.
-            _face_recognizer = FaceRecognizer(_known_people_store, threshold=0.35, min_face_size=60)
+            # Cosine distance = 1 - cosine_similarity; ~0.55 is lenient enough for webcam enroll vs live.
+            _face_recognizer = FaceRecognizer(_known_people_store, threshold=0.55, min_face_size=40)
         return _known_people_store, _face_recognizer
 
 
