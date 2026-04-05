@@ -333,8 +333,9 @@ class ZonePayload(BaseModel):
     # COCO class name(s): string (legacy) or list for multiple trigger objects
     trigger: Union[str, List[str]] = "person"
     coordinates: List[List[float]]
-    rule: str = "dwell"
+    rule: str = "loitering"
     severity: str = "info"
+    dwellTime: Optional[float] = None
     personIdentity: Optional[PersonIdentityPayload] = None
 
 
@@ -379,6 +380,7 @@ def add_zone(payload: ZonePayload):
         "coordinates": payload.coordinates,
         "rule": payload.rule,
         "severity": payload.severity,
+        "dwellTime": payload.dwellTime if payload.dwellTime is not None else 10,
         "personIdentity": payload.personIdentity.model_dump() if payload.personIdentity else None,
     })
 

@@ -38,6 +38,7 @@ export async function saveZone(zone: Zone): Promise<void> {
       coordinates: zone.polygon.map((p) => [p.x, p.y]),
       rule: zone.rule.trigger,
       severity: zone.rule.severity,
+      dwellTime: zone.rule.dwellTime ?? 10,
       personIdentity: zone.rule.personIdentity ?? null,
     }),
   });

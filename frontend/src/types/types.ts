@@ -72,7 +72,7 @@ export interface Zone {
 export type ZoneTriggerType =
   | "enter"
   | "exit"
-  | "dwell";
+  | "loitering";
 
 export interface ZoneRule {
   trigger: ZoneTriggerType;

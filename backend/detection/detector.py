@@ -42,6 +42,9 @@ class ObjectDetector:
         self.trigger_cooldown_seconds = trigger_cooldown_seconds
         # key: (zone_id, track_id), value: boolean indicating if object is currently in zone
         self.zone_object_states = {}
+        # Loitering: time spent continuously in zone (seconds since entry)
+        self.dwell_start_times = {}
+        self.dwell_fired = {}
         self.mail_service = MailService()
         self.global_config = self._load_global_config()
     
@@ -59,6 +62,8 @@ class ObjectDetector:
     def clear_zone_states(self):
         """Clear all zone-object state tracking to reset on video restart."""
         self.zone_object_states.clear()
+        self.dwell_start_times.clear()
+        self.dwell_fired.clear()
         print("[INFO] Zone-object states cleared")
     
     def track(self, frame):
@@ -229,9 +234,10 @@ class ObjectDetector:
         current_states = {}  # Track current frame's states
 
         for zone in zone_manager.zones:
-            rule = zone.get("rule", "").lower()  # "enter", "exit", or ""
+            rule = zone.get("rule", "").lower()  # "enter", "exit", "loitering", or ""
             identity_rule = zone.get("personIdentity") or None
-            
+            legacy_fired_for_zone = False
+
             for detection in tracked_objects:
                 in_zone = zone_manager._is_point_in_coordinates(detection["center"], zone["coordinates"])
                 
@@ -245,6 +251,7 @@ class ObjectDetector:
                     
                     # Trigger on state transitions based on rule
                     should_trigger = False
+                    trigger_reason = ""
                     if rule == "enter" and not previous_state and in_zone:
                         # Object just entered the zone
                         should_trigger = True
@@ -252,9 +259,26 @@ class ObjectDetector:
                     elif rule == "exit":
                         # Will handle exit triggers below after processing all objects
                         pass
+                    elif rule == "loitering":
+                        dwell_limit = float(zone.get("dwellTime") or zone.get("dwell_time") or 10)
+                        if not previous_state:
+                            self.dwell_start_times[state_key] = time.time()
+                            self.dwell_fired.pop(state_key, None)
+                        enter_ts = self.dwell_start_times.get(state_key)
+                        if enter_ts is None:
+                            self.dwell_start_times[state_key] = time.time()
+                            enter_ts = self.dwell_start_times[state_key]
+                        elapsed = time.time() - enter_ts
+                        if elapsed >= dwell_limit and not self.dwell_fired.get(state_key, False):
+                            should_trigger = True
+                            trigger_reason = "loitering"
+                            self.dwell_fired[state_key] = True
                     elif rule == "":
-                        # No rule specified, trigger every frame (legacy behavior)
-                        should_trigger = True
+                        # Legacy: one trigger per zone per frame (first matching object)
+                        if not legacy_fired_for_zone:
+                            should_trigger = True
+                            trigger_reason = "legacy"
+                            legacy_fired_for_zone = True
                     
                     if should_trigger:
                         # Optional identity filter (only applies when zone triggers for person)
@@ -304,8 +328,12 @@ class ObjectDetector:
                                 "detection": detection,
                                 "timestamp": now
                             })
-                    
-                    break
+
+        # Drop dwell/loiter timers for objects no longer in zone
+        for key in list(self.dwell_start_times.keys()):
+            if key not in current_states:
+                self.dwell_start_times.pop(key, None)
+                self.dwell_fired.pop(key, None)
 
         # Handle exit triggers - check for objects that were in zone but are no longer there
         for state_key, was_in_zone in list(self.zone_object_states.items()):

@@ -28,6 +28,7 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [isZoneModalOpen, setIsZoneModalOpen] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [draftPoints, setDraftPoints] = useState<Point[]>([]);
   const [hoverPoint, setHoverPoint] = useState<Point | null>(null);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
@@ -71,18 +72,28 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
     return () => observer.disconnect();
   }, []);
 
-  // Escape key cancels drawing
+  // Escape key cancels drawing or delete mode
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isDrawing) {
+      if (e.key !== "Escape") return;
+      if (isDrawing) {
         setIsDrawing(false);
         setDraftPoints([]);
         setHoverPoint(null);
       }
+      if (isDeleteMode) {
+        setIsDeleteMode(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isDrawing]);
+  }, [isDrawing, isDeleteMode]);
+
+  useEffect(() => {
+    if (isDeleteMode && zones.length === 0) {
+      setIsDeleteMode(false);
+    }
+  }, [zones.length, isDeleteMode]);
 
   useImperativeHandle(ref, () => ({
     getZones: () => zones,
@@ -134,7 +145,7 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
 
   const nearOrigin = hoverPoint ? isNearOrigin(hoverPoint) : false;
   const showUploadedVideo = videoSource?.type === "video_file" && Boolean(videoSource.filePath);
-  const allowOverlayInteraction = isDrawing || videoSource?.type === "camera";
+  const allowOverlayInteraction = isDrawing || isDeleteMode || videoSource?.type === "camera";
 
   const handleOverlayClick = (x: number, y: number) => {
     if (!isDrawing) return;
@@ -160,7 +171,12 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
       name: `Zone ${zones.length + 1}`,
       color,
       polygon: [...draftPoints],
-      rule: { trigger: "dwell", objectClasses: ["person"], dwellTime: 10, severity: "info" },
+      rule: {
+        trigger: "loitering",
+        objectClasses: ["person"],
+        dwellTime: 10,
+        severity: "info",
+      },
     };
     setZones((prev) => [...prev, newZone]);
     setSelectedZoneId(newZone.id);
@@ -172,17 +188,22 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
 
   const handleAddZone = () => {
     setIsDrawing(true);
+    setIsDeleteMode(false);
     setDraftPoints([]);
     setHoverPoint(null);
     setSelectedZoneId(null);
     setIsZoneModalOpen(false);
   };
 
-  const handleDeleteZone = () => {
-    if (!selectedZoneId) return;
-    setZones((prev) => prev.filter((z) => z.id !== selectedZoneId));
-    setSelectedZoneId(null);
-    setIsZoneModalOpen(false);
+  const toggleDeleteMode = () => {
+    setIsDeleteMode((prev) => {
+      const next = !prev;
+      if (next) {
+        setIsZoneModalOpen(false);
+        setSelectedZoneId(null);
+      }
+      return next;
+    });
   };
 
   const handleZoneChange = (updated: Zone) => {
@@ -209,24 +230,33 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
               Click to add vertices · click origin to close · Esc to cancel
             </span>
           )}
+          {isDeleteMode && (
+            <span className="text-xs bg-red-900 px-2 py-1 rounded animate-pulse">
+              Click a zone to remove it · Esc or Cancel to exit
+            </span>
+          )}
         </div>
 
         <div className="flex gap-2 text-sm">
           <button
             type="button"
             onClick={handleAddZone}
-            disabled={isDrawing}
+            disabled={isDrawing || isDeleteMode}
             className="bg-[#151B22] px-3 py-1 rounded disabled:opacity-40"
           >
             + Add Zone
           </button>
           <button
             type="button"
-            onClick={handleDeleteZone}
-            disabled={!selectedZoneId || isDrawing}
-            className="text-red-400 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={toggleDeleteMode}
+            disabled={isDrawing || zones.length === 0}
+            className={
+              isDeleteMode
+                ? "bg-red-900/80 text-red-100 px-3 py-1 rounded"
+                : "text-red-400 px-3 py-1 rounded disabled:cursor-not-allowed disabled:opacity-40"
+            }
           >
-            Delete Zone
+            {isDeleteMode ? "Cancel delete" : "Delete Zone"}
           </button>
         </div>
       </div>
@@ -264,7 +294,13 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
             height={stageSize.height}
             className="absolute inset-0"
             style={{
-              cursor: isDrawing ? (nearOrigin ? "cell" : "crosshair") : "default",
+              cursor: isDeleteMode
+                ? "pointer"
+                : isDrawing
+                  ? nearOrigin
+                    ? "cell"
+                    : "crosshair"
+                  : "default",
               pointerEvents: allowOverlayInteraction ? "auto" : "none",
             }}
             onClick={(event) => {
@@ -291,6 +327,10 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
                   onClick={(event) => {
                     if (isDrawing) return;
                     event.cancelBubble = true;
+                    if (isDeleteMode) {
+                      setZones((prev) => prev.filter((z) => z.id !== zone.id));
+                      return;
+                    }
                     setSelectedZoneId(zone.id);
                     setIsZoneModalOpen(true);
                   }}

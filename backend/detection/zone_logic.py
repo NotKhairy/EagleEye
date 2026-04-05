@@ -34,6 +34,7 @@ class ZoneManager:
                                 "coordinates": polygon,
                                 "rule": zone_data.get("rule", ""),
                                 "severity": zone_data.get("severity", ""),
+                                "dwellTime": zone_data.get("dwellTime", zone_data.get("dwell_time", 10)),
                                 "personIdentity": zone_data.get("personIdentity"),
                                 "triggered": False
                             })
@@ -51,16 +52,19 @@ class ZoneManager:
                 trigger_value = trig[0]
             else:
                 trigger_value = trig
-            config.append({
+            row = {
                 "zone_name": zone["name"],
                 "zone_id": zone["id"],
                 "description": zone["description"],
                 "trigger": trigger_value,
                 "coordinates": list(zone["coordinates"]),
                 "rule": zone["rule"],
-                "severity": zone["severity"]
-
-            })
+                "severity": zone["severity"],
+                "dwellTime": zone.get("dwellTime", 10),
+            }
+            if zone.get("personIdentity") is not None:
+                row["personIdentity"] = zone["personIdentity"]
+            config.append(row)
         
         with open(self.config_path, "w") as f:
             json.dump(config, f, indent=4)

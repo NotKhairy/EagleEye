@@ -12,9 +12,9 @@ type ZonePropertiesPanelProps = {
 };
 
 const ruleOptions: Array<{ value: ZoneTriggerType; label: string }> = [
-  { value: "enter", label: "Enter Zone" },
-  { value: "exit", label: "Exit Zone" },
-  { value: "dwell", label: "Stays longer than 10s" },
+  { value: "enter", label: "Enter zone" },
+  { value: "exit", label: "Exit zone" },
+  { value: "loitering", label: "Loitering (time threshold)" },
 ];
 
 const severityClasses: Record<AlertSeverity, string> = {
@@ -332,6 +332,32 @@ export default function ZonePropertiesPanel({
                 </option>
               ))}
             </select>
+            {zone.rule.trigger === "loitering" && (
+              <div className="mt-2">
+                <label className="text-xs text-gray-400">TIME THRESHOLD (SECONDS)</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  className="mt-1 w-full rounded border border-gray-700 bg-black p-2 text-sm"
+                  value={zone.rule.dwellTime ?? 10}
+                  onChange={(event) => {
+                    const v = Number.parseInt(event.target.value, 10);
+                    onChange({
+                      ...zone,
+                      rule: {
+                        ...zone.rule,
+                        dwellTime: Number.isFinite(v) && v > 0 ? v : 10,
+                      },
+                    });
+                  }}
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Alert once when a tracked object stays inside the zone continuously for at least this
+                  many seconds. Leaving the zone resets the timer.
+                </p>
+              </div>
+            )}
           </div>
 
           <div>
