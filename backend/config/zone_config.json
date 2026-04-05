@@ -1,32 +1,32 @@
 [
     {
         "zone_name": "Zone 1",
-        "zone_id": "zone-1775351770058",
+        "zone_id": "zone-1775352275659",
         "description": "Detection zone",
         "trigger": [
-            "car"
+            "person"
         ],
         "coordinates": [
             [
-                760.0,
-                576.0
+                532.0,
+                300.0
             ],
             [
-                506.0,
-                529.0
+                740.0,
+                442.0
             ],
             [
-                669.0,
-                457.0
+                220.0,
+                669.0
             ],
             [
-                828.0,
-                532.0
+                9.0,
+                436.0
             ]
         ],
         "rule": "loitering",
         "severity": "info",
-        "dwellTime": 15.0,
+        "dwellTime": 10.0,
         "personIdentity": null
     }
 ]

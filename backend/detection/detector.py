@@ -261,6 +261,7 @@ class ObjectDetector:
                         pass
                     elif rule == "loitering":
                         dwell_limit = float(zone.get("dwellTime") or zone.get("dwell_time") or 10)
+                        # Each object (track_id) has independent loitering timer
                         if not previous_state:
                             self.dwell_start_times[state_key] = time.time()
                             self.dwell_fired.pop(state_key, None)
@@ -269,10 +270,13 @@ class ObjectDetector:
                             self.dwell_start_times[state_key] = time.time()
                             enter_ts = self.dwell_start_times[state_key]
                         elapsed = time.time() - enter_ts
+                        # Trigger only once per object when threshold is reached
                         if elapsed >= dwell_limit and not self.dwell_fired.get(state_key, False):
                             should_trigger = True
                             trigger_reason = "loitering"
-                            self.dwell_fired[state_key] = True
+                            # Mark as fired - will be confirmed when event is created (after identity filtering)
+                            detection["loitering_elapsed"] = elapsed
+                            detection["loitering_threshold"] = dwell_limit
                     elif rule == "":
                         # Legacy: one trigger per zone per frame (first matching object)
                         if not legacy_fired_for_zone:
@@ -319,14 +323,29 @@ class ObjectDetector:
                         # Identity filter may set should_trigger False; only enqueue if still True.
                         if should_trigger:
                             now = time.time()
+                            # Mark as fired only AFTER confirming the event passes all filters
+                            if trigger_reason == "loitering":
+                                self.dwell_fired[state_key] = True
                             print(
                                 f"Zone '{zone['name']}' {trigger_reason} by {detection['label']} "
-                                f"(ID: {detection['track_id']})"
+                                f"(ID: {detection['track_id']}) "
+                                f"Loitering info: elapsed={detection.get('loitering_elapsed', 'N/A'):.2f}s, "
+                                f"threshold={detection.get('loitering_threshold', 'N/A')}s"
                             )
                             trigger_events.append({
                                 "zone": zone,
                                 "detection": detection,
-                                "timestamp": now
+                                "timestamp": now,
+                                "trigger_reason": trigger_reason,
+                                "object_info": {
+                                    "track_id": detection["track_id"],
+                                    "label": detection["label"],
+                                    "bbox": detection.get("bbox", (0, 0, 0, 0)),
+                                    "center": detection.get("center", (0, 0)),
+                                    "confidence": detection.get("confidence", 0.0),
+                                    "loitering_elapsed": detection.get("loitering_elapsed"),
+                                    "loitering_threshold": detection.get("loitering_threshold"),
+                                }
                             })
 
         # Drop dwell/loiter timers for objects no longer in zone
