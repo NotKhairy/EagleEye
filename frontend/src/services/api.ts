@@ -1,4 +1,4 @@
-import type { Zone } from "../types/types";
+import type { RuleConfig, Zone } from "../types/types";
 
 const API_BASE = "/api";
 export const VIDEO_FEED_URL = `${API_BASE}/video_feed`;
@@ -17,14 +17,23 @@ async function throwWithResponse(prefix: string, response: Response): Promise<ne
 export type GlobalConfig = {
   frameSkip: number;
   confidenceThreshold: number;
-  Action: {
-    desktopPush: boolean;
-    emailDigest: string | null;
-    saveSnapshotLocally: boolean;
-    SMS: string | null;
-    Call: string | null;
-  };
 };
+
+type RulePayload = {
+  rule_id: string;
+  name: string;
+  description?: string;
+  conditions: Record<string, unknown>;
+  severity: string;
+};
+
+type SavedZonePayload = {
+  zone_id: string;
+  zone_name: string;
+  coordinates: Array<[number, number]>;
+};
+
+const ZONE_COLORS = ["#3D99F5", "#F5A623", "#7ED321", "#D0021B", "#9013FE", "#50E3C2"];
 
 export async function saveZone(zone: Zone): Promise<void> {
   const response = await fetch(`${API_BASE}/zones`, {
@@ -33,17 +42,48 @@ export async function saveZone(zone: Zone): Promise<void> {
     body: JSON.stringify({
       zone_id: zone.id,
       zone_name: zone.name,
-      description: "Detection zone",
-      trigger: zone.rule.objectClasses,
       coordinates: zone.polygon.map((p) => [p.x, p.y]),
-      rule: zone.rule.trigger,
-      severity: zone.rule.severity,
-      dwellTime: zone.rule.dwellTime ?? 10,
-      personIdentity: zone.rule.personIdentity ?? null,
     }),
   });
   if (!response.ok) {
     await throwWithResponse("Failed to save zone", response);
+  }
+}
+
+export async function listZones(): Promise<Zone[]> {
+  const response = await fetch(`${API_BASE}/zones`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to list zones", response);
+  }
+
+  const zones = (await response.json()) as SavedZonePayload[];
+  return zones.map((zone, index) => ({
+    id: String(zone.zone_id),
+    name: zone.zone_name,
+    color: ZONE_COLORS[index % ZONE_COLORS.length],
+    polygon: zone.coordinates.map(([x, y]) => ({ x, y })),
+  }));
+}
+
+export async function saveRules(rules: RuleConfig[]): Promise<void> {
+  const payload: RulePayload[] = rules.map((rule) => ({
+    rule_id: rule.id,
+    name: rule.name,
+    description: rule.name,
+    conditions: {
+      when: rule.when,
+      actions: rule.actions,
+    },
+    severity: "info",
+  }));
+
+  const response = await fetch(`${API_BASE}/save_rules`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    await throwWithResponse("Failed to save rules", response);
   }
 }
 
@@ -87,6 +127,13 @@ export async function clearZones(): Promise<void> {
   const response = await fetch(`${API_BASE}/clear_zones`, { method: "POST" });
   if (!response.ok) {
     await throwWithResponse("Failed to clear zones", response);
+  }
+}
+
+export async function clearRules(): Promise<void> {
+  const response = await fetch(`${API_BASE}/clear_rules`, { method: "POST" });
+  if (!response.ok) {
+    await throwWithResponse("Failed to clear rules", response);
   }
 }
 

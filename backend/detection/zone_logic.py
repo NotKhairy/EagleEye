@@ -238,33 +238,3 @@ class ZoneManager:
                 zone["triggered"] = triggered
                 break
     
-    def draw_zones(self, frame):
-        """Draw all zones on the frame"""
-        for zone in self.zones:
-            polygon = self._coordinates_to_polygon(zone["coordinates"])
-            if len(polygon) < 3:
-                continue
-
-            # Red if triggered, green otherwise
-            color = (0, 0, 255) if zone["triggered"] else (0, 255, 0)
-            contour = self._polygon_to_contour(polygon)
-            cv2.polylines(frame, [contour], True, color, 2)
-            
-            # Draw zone label
-            trigger_text = "/".join(zone["trigger"]) if zone["trigger"] else "any"
-            label = f"{zone['name']} ({trigger_text})"
-            label_pos = (polygon[0][0] + 5, polygon[0][1] - 8)
-            cv2.putText(frame, label, label_pos, cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.5, color, 2)
-
-        # Draw active polygon being created.
-        if len(self.current_polygon) > 0:
-            for point in self.current_polygon:
-                cv2.circle(frame, point, 4, (255, 255, 0), -1)
-
-            if len(self.current_polygon) > 1:
-                contour = self._polygon_to_contour(self.current_polygon)
-                cv2.polylines(frame, [contour], False, (255, 255, 0), 2)
-
-            # Highlight the first point so user knows where to click to close.
-            cv2.circle(frame, self.current_polygon[0], self.close_distance, (0, 255, 255), 1)

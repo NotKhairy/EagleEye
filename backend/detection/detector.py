@@ -3,7 +3,6 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 import json
 from ultralytics import YOLO
 import time
-import smtplib
 from mailService import MailService
 
 
@@ -40,11 +39,11 @@ class ObjectDetector:
         self.confidence = confidence
         self.tracker = DeepSort(max_age=30, n_init=3)
         self.trigger_cooldown_seconds = trigger_cooldown_seconds
-        # key: (zone_id, track_id), value: boolean indicating if object is currently in zone
-        self.zone_object_states = {}
-        # Loitering: time spent continuously in zone (seconds since entry)
-        self.dwell_start_times = {}
-        self.dwell_fired = {}
+        # Per-zone runtime state:
+        # justEntered: detections that entered this frame near border
+        # justExited: detections that exited this frame near border
+        # inside: list of (detection, elapsed_seconds) for objects currently inside
+        self.zone_runtime_state = {}
         self.mail_service = MailService()
         self.global_config = self._load_global_config()
     
@@ -61,10 +60,200 @@ class ObjectDetector:
     
     def clear_zone_states(self):
         """Clear all zone-object state tracking to reset on video restart."""
-        self.zone_object_states.clear()
-        self.dwell_start_times.clear()
-        self.dwell_fired.clear()
+        self.zone_runtime_state.clear()
         print("[INFO] Zone-object states cleared")
+
+    def _point_to_segment_distance(self, point, seg_start, seg_end):
+        """Compute shortest Euclidean distance from point to a segment."""
+        px, py = float(point[0]), float(point[1])
+        x1, y1 = float(seg_start[0]), float(seg_start[1])
+        x2, y2 = float(seg_end[0]), float(seg_end[1])
+
+        dx = x2 - x1
+        dy = y2 - y1
+        if dx == 0 and dy == 0:
+            return ((px - x1) ** 2 + (py - y1) ** 2) ** 0.5
+
+        t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)
+        t = max(0.0, min(1.0, t))
+        proj_x = x1 + t * dx
+        proj_y = y1 + t * dy
+        return ((px - proj_x) ** 2 + (py - proj_y) ** 2) ** 0.5
+
+    def _distance_to_polygon_border(self, point, polygon):
+        """Compute shortest distance from point to polygon border."""
+        if polygon is None or len(polygon) < 2:
+            return float("inf")
+
+        min_dist = float("inf")
+        for i in range(len(polygon)):
+            p1 = polygon[i]
+            p2 = polygon[(i + 1) % len(polygon)]
+            dist = self._point_to_segment_distance(point, p1, p2)
+            if dist < min_dist:
+                min_dist = dist
+        return min_dist
+
+    def _ensure_zone_state(self, zone_id):
+        state = self.zone_runtime_state.get(zone_id)
+        if state is None:
+            state = {
+                "justEntered": [],
+                "justExited": [],
+                "inside": [],
+                "inside_map": {},
+            }
+            self.zone_runtime_state[zone_id] = state
+        return state
+
+    def _update_zone_state_for_frame(self, zone, tracked_objects, zone_manager, now, border_threshold=25.0):
+        zone_id = zone["id"]
+        state = self._ensure_zone_state(zone_id)
+        state["justEntered"] = []
+        state["justExited"] = []
+
+        inside_map = state["inside_map"]
+        seen_ids = set()
+
+        for detection in tracked_objects:
+            track_id = detection["track_id"]
+            point = detection["center"]
+            polygon = zone["coordinates"]
+            in_polygon = zone_manager._is_point_in_coordinates(point, polygon)
+            near_border = self._distance_to_polygon_border(point, polygon) <= border_threshold
+
+            is_inside = track_id in inside_map
+            if (not is_inside) and in_polygon and near_border:
+                payload = {
+                    "detection": detection,
+                    "entered_at": now,
+                    "last_seen": now,
+                }
+                inside_map[track_id] = payload
+                state["justEntered"].append(detection)
+                seen_ids.add(track_id)
+                continue
+
+            if is_inside:
+                if in_polygon:
+                    inside_map[track_id]["detection"] = detection
+                    inside_map[track_id]["last_seen"] = now
+                    seen_ids.add(track_id)
+                elif near_border:
+                    elapsed = now - inside_map[track_id]["entered_at"]
+                    exit_detection = dict(detection)
+                    exit_detection["time_elapsed_inside"] = elapsed
+                    state["justExited"].append(exit_detection)
+                    inside_map.pop(track_id, None)
+
+        # Remove stale entries for tracks that disappeared from view.
+        stale_seconds = 2.0
+        for track_id, payload in list(inside_map.items()):
+            if track_id in seen_ids:
+                continue
+            if now - payload["last_seen"] > stale_seconds:
+                inside_map.pop(track_id, None)
+
+        state["inside"] = []
+        for payload in inside_map.values():
+            elapsed = now - payload["entered_at"]
+            enriched = dict(payload["detection"])
+            enriched["time_elapsed_inside"] = elapsed
+            state["inside"].append((enriched, elapsed))
+
+        # Mirror runtime state onto zone object for easier debugging/introspection.
+        zone["justEntered"] = list(state["justEntered"])
+        zone["justExited"] = list(state["justExited"])
+        zone["inside"] = list(state["inside"])
+
+        return state
+
+    def _load_rules_config(self):
+        try:
+            with open("config/rules_config.json", "r") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def _match_label(self, expected_object, detection):
+        expected = str(expected_object or "").strip().lower()
+        if not expected:
+            return True
+        return detection.get("label", "").lower() == expected
+
+    def _evaluate_predicate(self, node, zone_state):
+        node_type = str(node.get("type", "")).lower()
+        expected_object = node.get("object")
+        results = []
+
+        if node_type == "enter":
+            for det in zone_state.get("justEntered", []):
+                if self._match_label(expected_object, det):
+                    results.append(det)
+
+        elif node_type == "exit":
+            for det in zone_state.get("justExited", []):
+                if self._match_label(expected_object, det):
+                    results.append(det)
+
+        elif node_type == "in_zone":
+            for det, _ in zone_state.get("inside", []):
+                if self._match_label(expected_object, det):
+                    results.append(det)
+
+        elif node_type == "loitering":
+            threshold = float(node.get("durationSeconds") or 10)
+            for det, elapsed in zone_state.get("inside", []):
+                if elapsed >= threshold and self._match_label(expected_object, det):
+                    results.append(det)
+
+        fired = len(results) > 0
+        if bool(node.get("not", False)):
+            return (not fired), []
+
+        return fired, results
+
+    def _evaluate_rule_node(self, node):
+        if not isinstance(node, dict):
+            return False, []
+
+        if "type" in node:
+            zone_id = node.get("zoneId")
+            if zone_id is None:
+                return False, []
+            zone_state = self.zone_runtime_state.get(zone_id)
+            if zone_state is None:
+                return False, []
+            return self._evaluate_predicate(node, zone_state)
+
+        operator = str(node.get("operator", "")).upper()
+        if operator == "NOT":
+            child = node.get("child")
+            fired, _ = self._evaluate_rule_node(child)
+            return (not fired), []
+
+        children = node.get("children", [])
+        if not isinstance(children, list) or len(children) == 0:
+            return False, []
+
+        if operator == "AND":
+            all_matches = []
+            for child in children:
+                child_fired, child_matches = self._evaluate_rule_node(child)
+                if not child_fired:
+                    return False, []
+                all_matches.extend(child_matches)
+            return True, all_matches
+
+        if operator == "OR":
+            for child in children:
+                child_fired, child_matches = self._evaluate_rule_node(child)
+                if child_fired:
+                    return True, child_matches
+            return False, []
+
+        return False, []
     
     def track(self, frame):
         """Run YOLO detection, then DeepSORT tracking for persistent IDs."""
@@ -109,37 +298,29 @@ class ObjectDetector:
 
         return tracked_objects
     
-    def handle_trigger(self, zone, detection, snapshot=None):
-        """Handle trigger actions based on global config settings."""
-        # Load fresh config each time to get latest updates
-        global_config = self._load_global_config()
-        Action = global_config.get("Action", {})
-        print(Action)
-        
-        # Check desktopPush
-        if Action.get("desktopPush"):
-            print("here 1")
-            self._handle_desktop_push(zone, detection)
-        
-        # Check email
-        email = Action.get("emailDigest")
-        if email:
-            print("here 2")
-            self._handle_email(zone, detection, email, snapshot)
-        
-        # Check saveSnapshotLocally
-        if Action.get("saveSnapshotLocally"):
-            self._handle_save_snapshot(zone, detection, snapshot)
-        
-        # Check SMS
-        sms_number = Action.get("SMS")
-        if sms_number:
-            self._handle_sms(zone, detection, sms_number)
-        
-        # Check CALL
-        call_number = Action.get("CALL")
-        if call_number:
-            self._handle_call(zone, detection, call_number)
+    def handle_trigger(self, rule_event, snapshot=None):
+        """Handle trigger actions assigned by fired rules."""
+
+        actions = [str(a).lower() for a in (rule_event.get("actions") or [])]
+        if len(actions) == 0:
+            return
+
+        matched_objects = rule_event.get("matched_objects") or []
+        detection = matched_objects[0] if matched_objects else {
+            "label": "object",
+            "track_id": "n/a",
+        }
+
+        if "notification" in actions or "desktopnotification" in actions:
+            self._handle_desktop_push(rule_event, detection)
+
+        if "email" in actions:
+            recipient = "khaledkherallah204@gmail.com"
+            if recipient:
+                self._handle_email(rule_event, detection, recipient, snapshot)
+            else:
+                print(f"[WARN] Rule '{rule_event.get('rule_name')}' requested email but no emailDigest configured")
+
     
     def execute_trigger_events(self, trigger_events, snapshot_path=None):
         """
@@ -151,14 +332,15 @@ class ObjectDetector:
             snapshot_path: Path to the saved annotated frame snapshot
         """
         for event in trigger_events:
-            self.handle_trigger(event["zone"], event["detection"], snapshot_path)
+            self.handle_trigger(event, snapshot_path)
     
-    def _handle_desktop_push(self, zone, detection):
+    def _handle_desktop_push(self, rule_event, detection):
         """Send a desktop push notification."""
         try:
             from win10toast import ToastNotifier
             toaster = ToastNotifier()
-            message = f"Zone '{zone['name']}' triggered by {detection['label']} (ID: {detection['track_id']})"
+            rule_name = rule_event.get("rule_name", "Unnamed rule")
+            message = f"Rule '{rule_name}' triggered by {detection['label']} (ID: {detection['track_id']})"
             toaster.show_toast(
                 title="EagleEye Detection Alert",
                 msg=message,
@@ -167,29 +349,17 @@ class ObjectDetector:
             )
         except ImportError:
             print("[MOCK - desktopPush] win10toast not installed. Install with: pip install win10toast")
-            print(f"[MOCK - desktopPush] Zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
+            print(f"[MOCK - desktopPush] Rule '{rule_event.get('rule_name')}' - {detection['label']} ID: {detection['track_id']}")
     
-    def _handle_email(self, zone, detection, email_address, snapshot):
+    def _handle_email(self, rule_event, detection, email_address, snapshot):
+        rule_name = rule_event.get("rule_name", "Unnamed rule")
         self.mail_service.send_email(
             recipient_email=email_address,
-            subject=f"EagleEye Alert: Zone '{zone['name']}' Triggered",
-            body=f"Zone '{zone['name']}' was triggered by {detection['label']} (ID: {detection['track_id']})",
+            subject=f"EagleEye Alert: Rule '{rule_name}' Triggered",
+            body=f"Rule '{rule_name}' was triggered by {detection['label']} (ID: {detection['track_id']})",
             attachments=[snapshot] if snapshot else None
         )
         print("Success!")
-
-    
-    def _handle_save_snapshot(self, zone, detection, snapshot):
-        """Save snapshot locally."""
-        print(f"[MOCK - saveSnapshotLocally] Saving snapshot for zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
-    
-    def _handle_sms(self, zone, detection, phone_number):
-        """Send SMS notification."""
-        print(f"[MOCK - SMS] Sending SMS to {phone_number} for zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
-    
-    def _handle_call(self, zone, detection, phone_number):
-        """Make phone call notification."""
-        print(f"[MOCK - CALL] Calling {phone_number} for zone '{zone['name']}' - {detection['label']} ID: {detection['track_id']}")
         
 
             
@@ -228,172 +398,42 @@ class ObjectDetector:
         DOES NOT execute triggers - returns them for later execution after frame annotation.
         """
         zone_manager.reset_triggers()
+        now = time.time()
 
-        triggered_zones = set()
-        trigger_events = []  # Collect triggers to execute later
-        current_states = {}  # Track current frame's states
-
+        live_zone_ids = set()
         for zone in zone_manager.zones:
-            rule = zone.get("rule", "").lower()  # "enter", "exit", "loitering", or ""
-            identity_rule = zone.get("personIdentity") or None
-            legacy_fired_for_zone = False
+            zone_id = zone["id"]
+            live_zone_ids.add(zone_id)
+            state = self._update_zone_state_for_frame(zone, tracked_objects, zone_manager, now)
+            if len(state["inside"]) > 0:
+                zone_manager.set_zone_triggered(zone_id, True)
 
-            for detection in tracked_objects:
-                in_zone = zone_manager._is_point_in_coordinates(detection["center"], zone["coordinates"])
-                
-                if in_zone and zone_manager.zone_matches_label(zone, detection["label"]):
-                    zone_manager.set_zone_triggered(zone["id"], True)
-                    triggered_zones.add(zone["id"])
-                    
-                    state_key = (zone["id"], detection["track_id"])
-                    previous_state = self.zone_object_states.get(state_key, False)
-                    current_states[state_key] = True
-                    
-                    # Trigger on state transitions based on rule
-                    should_trigger = False
-                    trigger_reason = ""
-                    if rule == "enter" and not previous_state and in_zone:
-                        # Object just entered the zone
-                        should_trigger = True
-                        trigger_reason = "entered"
-                    elif rule == "exit":
-                        # Will handle exit triggers below after processing all objects
-                        pass
-                    elif rule == "loitering":
-                        dwell_limit = float(zone.get("dwellTime") or zone.get("dwell_time") or 10)
-                        # Each object (track_id) has independent loitering timer
-                        if not previous_state:
-                            self.dwell_start_times[state_key] = time.time()
-                            self.dwell_fired.pop(state_key, None)
-                        enter_ts = self.dwell_start_times.get(state_key)
-                        if enter_ts is None:
-                            self.dwell_start_times[state_key] = time.time()
-                            enter_ts = self.dwell_start_times[state_key]
-                        elapsed = time.time() - enter_ts
-                        # Trigger only once per object when threshold is reached
-                        if elapsed >= dwell_limit and not self.dwell_fired.get(state_key, False):
-                            should_trigger = True
-                            trigger_reason = "loitering"
-                            # Mark as fired - will be confirmed when event is created (after identity filtering)
-                            detection["loitering_elapsed"] = elapsed
-                            detection["loitering_threshold"] = dwell_limit
-                    elif rule == "":
-                        # Legacy: one trigger per zone per frame (first matching object)
-                        if not legacy_fired_for_zone:
-                            should_trigger = True
-                            trigger_reason = "legacy"
-                            legacy_fired_for_zone = True
-                    
-                    if should_trigger:
-                        # Optional identity filter (only applies when zone triggers for person)
-                        if (
-                            identity_rule
-                            and detection.get("label", "").lower() == "person"
-                            and frame is not None
-                            and face_recognizer is not None
-                        ):
-                            mode = str(identity_rule.get("mode", "")).lower()
-                            allowed_ids = set(identity_rule.get("personIds") or [])
-                            if mode in ("whitelist", "blacklist") and allowed_ids:
-                                x1, y1, x2, y2 = detection.get("bbox", (0, 0, 0, 0))
-                                crop = _bgr_face_crop_from_person_bbox(frame, x1, y1, x2, y2)
-                                match = face_recognizer.identify_bgr(crop) if crop is not None else None
-                                matched_id = match.person_id if match else None
-                                detection = {**detection}
-                                detection["face_person_id"] = matched_id
-                                detection["face_person_name"] = match.person_name if match else None
-                                detection["face_distance"] = float(match.distance) if match else None
+        # Remove state for deleted zones.
+        for zone_id in list(self.zone_runtime_state.keys()):
+            if zone_id not in live_zone_ids:
+                self.zone_runtime_state.pop(zone_id, None)
 
-                                if mode == "whitelist":
-                                    # Trigger if NOT recognized as one of the allowed people
-                                    if matched_id in allowed_ids:
-                                        should_trigger = False
-                                elif mode == "blacklist":
-                                    # Trigger if recognized as one of the blocked people
-                                    if matched_id not in allowed_ids:
-                                        should_trigger = False
+        trigger_events = []
+        rules = self._load_rules_config()
+        for rule in rules:
+            conditions = rule.get("conditions") or {}
+            when_node = conditions.get("when")
+            actions = conditions.get("actions") or []
 
-                                print(
-                                    f"[face] zone={zone.get('name')} mode={mode} "
-                                    f"track={detection.get('track_id')} "
-                                    f"matched_id={matched_id} dist={detection.get('face_distance')} "
-                                    f"trigger_after_identity={should_trigger}"
-                                )
+            fired, matched_objects = self._evaluate_rule_node(when_node)
+            if not fired:
+                continue
 
-                        # Identity filter may set should_trigger False; only enqueue if still True.
-                        if should_trigger:
-                            now = time.time()
-                            # Mark as fired only AFTER confirming the event passes all filters
-                            if trigger_reason == "loitering":
-                                self.dwell_fired[state_key] = True
-                            print(
-                                f"Zone '{zone['name']}' {trigger_reason} by {detection['label']} "
-                                f"(ID: {detection['track_id']}) "
-                                f"Loitering info: elapsed={detection.get('loitering_elapsed', 'N/A'):.2f}s, "
-                                f"threshold={detection.get('loitering_threshold', 'N/A')}s"
-                            )
-                            trigger_events.append({
-                                "zone": zone,
-                                "detection": detection,
-                                "timestamp": now,
-                                "trigger_reason": trigger_reason,
-                                "object_info": {
-                                    "track_id": detection["track_id"],
-                                    "label": detection["label"],
-                                    "bbox": detection.get("bbox", (0, 0, 0, 0)),
-                                    "center": detection.get("center", (0, 0)),
-                                    "confidence": detection.get("confidence", 0.0),
-                                    "loitering_elapsed": detection.get("loitering_elapsed"),
-                                    "loitering_threshold": detection.get("loitering_threshold"),
-                                }
-                            })
+            event = {
+                "rule_id": rule.get("rule_id"),
+                "rule_name": rule.get("name", "Unnamed rule"),
+                "actions": actions,
+                "matched_objects": matched_objects,
+                "timestamp": now,
+            }
+            trigger_events.append(event)
 
-        # Drop dwell/loiter timers for objects no longer in zone
-        for key in list(self.dwell_start_times.keys()):
-            if key not in current_states:
-                self.dwell_start_times.pop(key, None)
-                self.dwell_fired.pop(key, None)
-
-        # Handle exit triggers - check for objects that were in zone but are no longer there
-        for state_key, was_in_zone in list(self.zone_object_states.items()):
-            if was_in_zone and state_key not in current_states:
-                # Object was in zone previously but is not in current_states
-                zone_id, track_id = state_key
-                zone = next((z for z in zone_manager.zones if z["id"] == zone_id), None)
-                
-                if zone:
-                    rule = zone.get("rule", "").lower()
-                    if rule == "exit":
-                        # Find the detection to get label for logging
-                        detection = next(
-                            (d for d in tracked_objects if d["track_id"] == track_id),
-                            None
-                        )
-                        label = detection["label"] if detection else "unknown"
-                        
-                        now = time.time()
-                        print(
-                            f"Zone '{zone['name']}' exited by {label} "
-                            f"(ID: {track_id})"
-                        )
-                        # Create a synthetic detection for exit event
-                        exit_detection = {
-                            "track_id": track_id,
-                            "label": label,
-                            "bbox": (0, 0, 0, 0),
-                            "center": (0, 0),
-                            "confidence": 0.0,
-                        }
-                        trigger_events.append({
-                            "zone": zone,
-                            "detection": exit_detection,
-                            "timestamp": now
-                        })
-        
-        # Update state for next frame
-        self.zone_object_states = current_states
-        
         return {
-            "any_triggered": len(triggered_zones) > 0,
-            "trigger_events": trigger_events
+            "any_triggered": len(trigger_events) > 0,
+            "trigger_events": trigger_events,
         }

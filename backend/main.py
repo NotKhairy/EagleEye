@@ -85,9 +85,6 @@ def process_next_frame(runtime):
     runtime.last_zone_triggered = zone_result["any_triggered"]
     runtime.last_trigger_events = zone_result["trigger_events"]
 
-    # Draw all zones and UI.
-    runtime.zone_manager.draw_zones(annotated_frame)
-    draw_ui(annotated_frame, runtime.zone_manager, runtime.last_zone_triggered)
     runtime.latest_annotated_frame = annotated_frame.copy()
 
     # Save the annotated frame and execute triggers ONLY if there are trigger events.
@@ -183,16 +180,3 @@ def run_loop_in_thread(runtime, stop_event):
 
 
 
-def draw_ui(frame, zone_manager, any_zone_triggered):
-    # """Draw UI elements on frame"""
-    # # Instructions
-    # instructions = "Left-click: Add point/close polygon | Esc: Cancel draft | Right-click: Delete | 'c': Clear all | 'q': Quit"
-    # cv2.putText(frame, instructions, (10, 30), 
-    #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-    
-    # Status information
-    zone_count = len(zone_manager.zones)
-    triggered_count = sum(1 for z in zone_manager.zones if z["triggered"])
-    status = f"Zones: {zone_count} | Triggered: {triggered_count}"
-    cv2.putText(frame, status, (10, 60), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)

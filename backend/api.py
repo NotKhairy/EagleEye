@@ -30,6 +30,13 @@ _known_people_store = None
 _face_recognizer = None
 _face_lock = threading.Lock()
 
+class RulePayload(BaseModel):
+    rule_id: str
+    name: str
+    description: Optional[str] = None
+    conditions: dict  # This can be further defined based on expected rule structure
+    severity: str = "info"
+
 
 def _get_face_components():
     global _known_people_store, _face_recognizer
@@ -127,18 +134,11 @@ def video_feed():
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
-class ActionPayload(BaseModel):
-    desktopPush: bool
-    emailDigest: Optional[str] = None
-    saveSnapshotLocally: bool
-    SMS: Optional[str] = None
-    Call: Optional[str] = None
-
 
 class GlobalConfigPayload(BaseModel):
     frameSkip: int
     confidenceThreshold: float
-    Action: ActionPayload
+
 
 
 @app.post("/global_config")
@@ -318,6 +318,64 @@ def clear_zones():
         return {"status": "zones cleared from runtime and file"}
 
 
+@app.get("/zones")
+def get_zones():
+    config_path = _zone_config_path()
+    try:
+        with open(config_path, "r") as f:
+            zones = json.load(f)
+            if isinstance(zones, list):
+                return zones
+            return []
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError:
+        return []
+
+
+@app.post("/clear_rules")
+def clear_rules():
+    global runtime
+    rules_path = "config/rules_config.json"
+    
+    # Clear rules from JSON file
+    try:
+        os.makedirs(os.path.dirname(rules_path), exist_ok=True)
+        with open(rules_path, "w") as f:
+            json.dump([], f, indent=4)
+        print("[clear_rules] Cleared rules_config.json file")
+    except Exception as e:
+        print(f"[clear_rules] Error clearing rules config file: {e}")
+    
+    # Clear rules from runtime if it exists
+    with runtime_lock:
+        if runtime is None:
+            return {"status": "rules cleared (no runtime)"}
+        runtime.rule_manager.clear_all_rules()
+        return {"status": "rules cleared from runtime and file"}
+    
+@app.post("/save_rules")
+def save_rules(rules: List[RulePayload]):
+    rules_path = "config/rules_config.json"
+    
+    # Save rules to JSON file
+    try:
+        serializable_rules = [rule.model_dump() for rule in rules]
+        os.makedirs(os.path.dirname(rules_path), exist_ok=True)
+        with open(rules_path, "w") as f:
+            json.dump(serializable_rules, f, indent=4)
+        print(f"[save_rules] Saved {len(rules)} rules to rules_config.json")
+    except Exception as e:
+        print(f"[save_rules] Error saving rules config file: {e}")
+        return {"status": "error", "message": str(e)}
+    
+    # Reload rules into runtime if it exists
+    with runtime_lock:
+        if runtime is not None:
+            runtime.rule_manager.load_rules()
+            print("[save_rules] Rules reloaded into runtime")
+    
+    return {"status": "rules saved and reloaded into runtime if available", "rule_count": len(rules)}
 
 # ---------- Zone management ----------
 
@@ -337,6 +395,9 @@ class ZonePayload(BaseModel):
     severity: str = "info"
     dwellTime: Optional[float] = None
     personIdentity: Optional[PersonIdentityPayload] = None
+
+
+
 
 
 DEFAULT_ZONE_CONFIG = "config/zone_config.json"

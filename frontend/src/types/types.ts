@@ -19,25 +19,61 @@ export interface VideoSource {
    Detection Settings
 ========================= */
 
-export interface DetectionSettings {
-  frameSkip: number;
-  confidenceThreshold: number;
-  selectedObjects: ObjectClass[];
+export interface RuleConfig{
+  id: string;
+  name: string;
+  when: RuleNode;
+  actions: RuleAction[];
+}
+
+export type RuleAction = "notification" | "email";
+export type RuleObject = "PERSON" | "CAR" | string;
+export type ZoneEvent = "enter" | "exit" | "in_zone" | "loitering";
+
+export type RuleNode = LogicalNode | PredicateNode;
+
+export type LogicalNode = 
+| {
+  operator: "AND" | "OR";
+  children: RuleNode[];
+}
+| {
+  operator: "NOT";
+  child: RuleNode;
+};
+
+export type PredicateNode = EnterZonePredicate | ExitZonePredicate | InZonePredicate | LoiteringPredicate;
+
+export interface EnterZonePredicate {
+  type: "enter";
+  object: RuleObject;
+  not: boolean;
+  zoneId: string;
+}
+
+export interface ExitZonePredicate {
+  type: "exit";
+  object: RuleObject;
+  not: boolean;
+  zoneId: string;
 }
 
 
-/* =========================
-   Object Classes
-========================= */
+export interface InZonePredicate {
+  type: "in_zone";
+  object: RuleObject;
+  zoneId: string;
+  not: boolean;
+}
 
-export type ObjectClass =
-  | "person"
-  | "car"
-  | "bicycle"
-  | "motorcycle"
-  | "bus"
-  | "truck"
-  | "package";
+
+export interface LoiteringPredicate {
+  type: "loitering";
+  object: RuleObject;
+  zoneId: string;
+  durationSeconds: number;
+  not: boolean;
+}
 
 
 /* =========================
@@ -61,7 +97,6 @@ export interface Zone {
   name: string;
   polygon: Polygon;
   color: string;
-  rule: ZoneRule;
 }
 
 
@@ -69,19 +104,18 @@ export interface Zone {
    Zone Rules
 ========================= */
 
+export type rule = {
+  id: string;
+  name: string;
+  description: string;
+};
+
+
 export type ZoneTriggerType =
   | "enter"
   | "exit"
   | "loitering";
 
-export interface ZoneRule {
-  trigger: ZoneTriggerType;
-  /** COCO names (lowercase, as YOLO emits). Empty = match any class. */
-  objectClasses: string[];
-  dwellTime?: number;
-  severity: AlertSeverity;
-  personIdentity?: PersonIdentityRule | null;
-}
 
 export type PersonIdentityMode = "whitelist" | "blacklist";
 
@@ -112,26 +146,6 @@ export interface BoundingBox {
   height: number;
 }
 
-export interface Detection {
-  id: number;          // tracking ID
-  label: ObjectClass;
-  confidence: number;
-  bbox: BoundingBox;
-}
-
-
-/* =========================
-   System Events (Log)
-========================= */
-
-export interface EventLogEntry {
-  id: string;
-  timestamp: string;
-  zoneName: string;
-  objectClass: ObjectClass | "unknown";
-  message: string;
-  severity: AlertSeverity;
-}
 
 
 /* =========================

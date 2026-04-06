@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import DetectionSettingsPanel from "../components/DetectionSettingsPanel";
 import ZoneCanvas, { type ZoneCanvasHandle } from "../components/ZoneCanvas";
 import FooterStatusBar from "../components/FooterStatusBar";
-import type { VideoSource, VideoSourceType } from "../types/types";
-import { clearZones, saveZone, setGlobalConfig, startMonitoring, uploadVideoFile, type GlobalConfig } from "../services/api";
+import type { RuleConfig, VideoSource, VideoSourceType, Zone } from "../types/types";
+import { clearRules, clearZones, saveRules, saveZone, setGlobalConfig, startMonitoring, uploadVideoFile, type GlobalConfig } from "../services/api";
 
 type CameraOption = {
   deviceId: string;
@@ -28,6 +28,7 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
   const [mediaResolution, setMediaResolution] = useState<string>("N/A");
   const [mediaFPS, setMediaFPS] = useState<string>("N/A");
   const [uploadedVideoName, setUploadedVideoName] = useState<string | null>(null);
+  const [zones, setZones] = useState<Zone[]>([]);
 
   const revokeUploadedVideoUrl = () => {
     if (uploadedVideoUrlRef.current) {
@@ -266,7 +267,7 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     setSelectedCameraId(deviceId || null);
   };
 
-  const handleStartMonitoring = async (globalConfig: GlobalConfig, videoSourceData: VideoSource) => {
+  const handleStartMonitoring = async (globalConfig: GlobalConfig, videoSourceData: VideoSource, rules: RuleConfig[]) => {
     const handle = zoneCanvasRef.current;
     if (!handle) return;
 
@@ -280,6 +281,10 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
       console.log("[CONFIG] Clearing all zones from backend...");
       await clearZones();
       console.log("[CONFIG] Zones cleared successfully");
+
+      console.log('[CONFIG] Clearing all rules from backend');
+      await clearRules(); 
+      console.log('[CONFIG] Rules cleared successfully');
       
       for (const zone of zones) {
         await saveZone({
@@ -295,6 +300,9 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
       
       await setGlobalConfig(globalConfig);
       console.log("[CONFIG] Global config saved");
+
+      await saveRules(rules);
+      console.log(`[CONFIG] Total rules saved: ${rules.length}`);
 
       // IMPORTANT: Release the camera stream before starting backend monitoring
       // This ensures the camera device is not locked by the browser
@@ -388,6 +396,7 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
       <DetectionSettingsPanel
         videoSourceType={videoSourceType}
         videoSource={videoSource}
+        zones={zones}
         cameras={cameras}
         selectedCameraId={selectedCameraId}
         uploadedVideoName={uploadedVideoName}
@@ -400,7 +409,12 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
         onStartMonitoring={handleStartMonitoring}
       />
       <div className="flex flex-col flex-1">
-        <ZoneCanvas ref={zoneCanvasRef} liveStream={liveStream} videoSource={videoSource} />
+        <ZoneCanvas
+          ref={zoneCanvasRef}
+          liveStream={liveStream}
+          videoSource={videoSource}
+          onZonesChange={setZones}
+        />
         <FooterStatusBar
           streamResolution={mediaResolution}
           fps={mediaFPS}

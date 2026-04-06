@@ -1,7 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Circle, Layer, Line, Stage, Text } from "react-konva";
 import type { Point, VideoSource, Zone } from "../types/types";
-import ZonePropertiesPanel from "./ZonePropertiesPanel";
 
 const CLOSE_RADIUS = 12;
 const ZONE_COLORS = ["#3D99F5", "#F5A623", "#7ED321", "#D0021B", "#9013FE", "#50E3C2"];
@@ -14,6 +13,7 @@ export type ZoneCanvasHandle = {
 type ZoneCanvasProps = {
   liveStream: MediaStream | null;
   videoSource: VideoSource | null;
+  onZonesChange?: (zones: Zone[]) => void;
 };
 
 function toKonvaPoints(pts: Point[]): number[] {
@@ -21,12 +21,11 @@ function toKonvaPoints(pts: Point[]): number[] {
 }
 
 const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCanvas(
-  { liveStream, videoSource },
+  { liveStream, videoSource, onZonesChange },
   ref
 ) {
   const [zones, setZones] = useState<Zone[]>([]);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
-  const [isZoneModalOpen, setIsZoneModalOpen] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
   const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [draftPoints, setDraftPoints] = useState<Point[]>([]);
@@ -95,12 +94,14 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
     }
   }, [zones.length, isDeleteMode]);
 
+  useEffect(() => {
+    onZonesChange?.(zones);
+  }, [onZonesChange, zones]);
+
   useImperativeHandle(ref, () => ({
     getZones: () => zones,
     getMediaSize: () => mediaSize,
   }));
-
-  const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null;
 
   const hasRenderableMedia = mediaSize.width > 0 && mediaSize.height > 0;
   const mediaScale = hasRenderableMedia
@@ -171,19 +172,13 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
       name: `Zone ${zones.length + 1}`,
       color,
       polygon: [...draftPoints],
-      rule: {
-        trigger: "loitering",
-        objectClasses: ["person"],
-        dwellTime: 10,
-        severity: "info",
-      },
     };
     setZones((prev) => [...prev, newZone]);
     setSelectedZoneId(newZone.id);
     setIsDrawing(false);
     setDraftPoints([]);
     setHoverPoint(null);
-    setIsZoneModalOpen(true);
+    handleSaveZone(newZone);
   };
 
   const handleAddZone = () => {
@@ -192,27 +187,21 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
     setDraftPoints([]);
     setHoverPoint(null);
     setSelectedZoneId(null);
-    setIsZoneModalOpen(false);
   };
 
   const toggleDeleteMode = () => {
     setIsDeleteMode((prev) => {
       const next = !prev;
       if (next) {
-        setIsZoneModalOpen(false);
         setSelectedZoneId(null);
       }
       return next;
     });
   };
 
-  const handleZoneChange = (updated: Zone) => {
-    setZones((prev) => prev.map((z) => (z.id === updated.id ? updated : z)));
-  };
 
   const handleSaveZone = async (zone: Zone) => {
     setZones((prev) => prev.map((z) => (z.id === zone.id ? zone : z)));
-    setIsZoneModalOpen(false);
     setSelectedZoneId(zone.id);
   };
 
@@ -332,7 +321,6 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
                       return;
                     }
                     setSelectedZoneId(zone.id);
-                    setIsZoneModalOpen(true);
                   }}
                 />
               ))}
@@ -409,14 +397,6 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
             </div>
           )}
         </div>
-
-        <ZonePropertiesPanel
-          isOpen={isZoneModalOpen}
-          zone={selectedZone}
-          onClose={() => setIsZoneModalOpen(false)}
-          onChange={handleZoneChange}
-          onSave={handleSaveZone}
-        />
 
       </div>
 

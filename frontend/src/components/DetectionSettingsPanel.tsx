@@ -1,9 +1,7 @@
 import { useRef, useState } from "react";
-import type { VideoSourceType, VideoSource } from "../types/types";
-import PhoneInput from "react-phone-number-input";
-import "react-phone-number-input/style.css";
-import type { E164Number } from "libphonenumber-js";
+import type { VideoSourceType, VideoSource, Zone, RuleConfig } from "../types/types";
 import type { GlobalConfig } from "../services/api";
+import RuleBuilderPanel, { type RuleBuilderPanelHandle } from "./RuleBuilderPanel";
 
 type CameraOption = {
   deviceId: string;
@@ -13,6 +11,7 @@ type CameraOption = {
 type DetectionSettingsPanelProps = {
   videoSourceType: VideoSourceType | undefined;
   videoSource: VideoSource | null;
+  zones: Zone[];
   cameras: CameraOption[];
   selectedCameraId: string | null;
   uploadedVideoName: string | null;
@@ -22,12 +21,13 @@ type DetectionSettingsPanelProps = {
   onActivateUploadFile: () => void;
   onUploadVideoFile: (file: File) => void;
   onSelectCamera: (deviceId: string) => void;
-  onStartMonitoring: (config: GlobalConfig, videoSource: VideoSource) => Promise<void>;
+  onStartMonitoring: (config: GlobalConfig, videoSource: VideoSource, rules: RuleConfig[]) => Promise<void>;
 };
 
 export default function DetectionSettingsPanel({
   videoSourceType,
   videoSource,
+  zones,
   cameras,
   selectedCameraId,
   uploadedVideoName,
@@ -42,20 +42,9 @@ export default function DetectionSettingsPanel({
   const selectedCamera =
     cameras.find((camera) => camera.deviceId === selectedCameraId) ?? null;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const ruleBuilderRef = useRef<RuleBuilderPanelHandle | null>(null);
   const [frameSkip, setFrameSkip] = useState(2);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
-  const [phoneNumber, setPhoneNumber] = useState<E164Number | undefined>();
-  const [callPhoneNumber, setCallPhoneNumber] = useState<
-    E164Number | undefined
-  >();
-  const [emailAddress, setEmailAddress] = useState<string>("");
-
-  const [desktopEnabled, setDesktopEnabled] = useState(false);
-  const [saveSnapshotEnabled, setSaveSnapshotEnabled] = useState(false);
-  const [smsEnabled, setSmsEnabled] = useState(false);
-  const [callEnabled, setCallEnabled] = useState(false);
-  const [emailEnabled, setEmailEnabled] = useState(false);
-
 
   const handleStartMonitoring = async () => {
     // Validate constraints
@@ -63,18 +52,6 @@ export default function DetectionSettingsPanel({
 
     if (!videoSourceType || (videoSourceType === "camera" && !selectedCamera) || (videoSourceType === "video_file" && !uploadedVideoName)) {
       constraints.push("Please select a video source.");
-    }
-
-    if (emailEnabled && !emailAddress.trim()) {
-      constraints.push("Email enabled but no email address provided.");
-    }
-
-    if (smsEnabled && !phoneNumber) {
-      constraints.push("SMS enabled but no phone number provided.");
-    }
-
-    if (callEnabled && !callPhoneNumber) {
-      constraints.push("Call enabled but no phone number provided.");
     }
 
     if (constraints.length > 0) {
@@ -87,19 +64,15 @@ export default function DetectionSettingsPanel({
       return;
     }
 
+    const rules = ruleBuilderRef.current?.getRules() ?? [];
+    console.log(`[CONFIG] Rules ready for monitoring: ${rules.length}`, rules);
+
     const globalConfig: GlobalConfig = {
       frameSkip,
-      confidenceThreshold,
-      Action: {
-        desktopPush: desktopEnabled,
-        emailDigest: emailEnabled ? emailAddress : null,
-        saveSnapshotLocally: saveSnapshotEnabled,
-        SMS: smsEnabled ? phoneNumber ?? null : null,
-        Call: callEnabled ? callPhoneNumber ?? null : null,
-      },
+      confidenceThreshold
     };
 
-    await onStartMonitoring(globalConfig, videoSource);
+    await onStartMonitoring(globalConfig, videoSource, rules);
   };
 
   return (
@@ -241,100 +214,10 @@ export default function DetectionSettingsPanel({
             }
           />
         </div>
-
-        {/* <div>
-          <label className="text-xs text-gray-400">OBJECT CLASSES</label>
-
-          <div className="grid grid-cols-2 gap-1.5 mt-1.5 text-xs leading-4">
-            <label><input type="checkbox" defaultChecked /> Person</label>
-            <label><input type="checkbox" defaultChecked /> Vehicle / Car</label>
-            <label><input type="checkbox" /> Bicycle</label>
-            <label><input type="checkbox" /> Motorcycle</label>
-            <label><input type="checkbox" /> Bus / Truck</label>
-            <label><input type="checkbox" /> Package / Bag</label>
-          </div>
-        </div> */}
       </div>
 
-      <div className="bg-[#11161D] p-3 rounded-lg space-y-2">
-        <h2 className="text-xs font-semibold">Trigger Action</h2>
-        <p className="text-[11px] text-gray-400">
-          Define the actions to be taken when an alert is triggered.
-        </p>
-        <br />
+      <RuleBuilderPanel ref={ruleBuilderRef} zones={zones} />
 
-        <div>
-          <label className="flex justify-between text-xs">
-            Desktop Push Notifications
-            <input type="checkbox" onChange={(e) => setDesktopEnabled(e.target.checked)} />
-          </label>
-        </div>
-
-        <div>
-          <label className="flex justify-between text-xs">
-            Email Alert
-            <input
-              type="checkbox"
-              checked={emailEnabled}
-              onChange={(e) => setEmailEnabled(e.target.checked)}
-            />
-          </label>
-          {emailEnabled && (
-            <input
-              type="email"
-              className="mt-1 w-full rounded border border-gray-700 bg-black p-2 text-[11px] size-5"
-              placeholder="Email Address"
-              value={emailAddress}
-              onChange={(e) => setEmailAddress(e.target.value)}
-            />
-          )}
-        </div>
-
-        <label className="flex justify-between text-xs">
-          Save Snapshots Folder
-          <input type="checkbox" onChange={(e) => setSaveSnapshotEnabled(e.target.checked)} />
-        </label>
-
-        <div>
-          <label className="flex justify-between text-xs">
-            SMS
-            <input
-              type="checkbox"
-              checked={smsEnabled}
-              onChange={(e) => setSmsEnabled(e.target.checked)}
-            />
-          </label>
-          {smsEnabled && (
-            <PhoneInput
-              placeholder="Enter phone number"
-              value={phoneNumber}
-              onChange={setPhoneNumber}
-              defaultCountry="EG"
-              className="mt-1 w-full rounded border border-gray-700 bg-black p-2 text-[11px] size-5"
-            />
-          )}
-        </div>
-
-        <div>
-          <label className="flex justify-between text-xs">
-            Call
-            <input
-              type="checkbox"
-              checked={callEnabled}
-              onChange={(e) => setCallEnabled(e.target.checked)}
-            />
-          </label>
-          {callEnabled && (
-            <PhoneInput
-              placeholder="Enter phone number"
-              value={callPhoneNumber}
-              onChange={setCallPhoneNumber}
-              defaultCountry="EG"
-              className="mt-1 w-full rounded border border-gray-700 bg-black p-2 text-[11px] size-5"
-            />
-          )}
-        </div>
-      </div>
 
       <button
         onClick={handleStartMonitoring}
