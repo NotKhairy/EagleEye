@@ -12,3 +12,4 @@ pydantic
 python-multipart
 facenet-pytorch
 Pillow
+plyer

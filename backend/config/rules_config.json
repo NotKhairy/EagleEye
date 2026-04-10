@@ -1,15 +1,14 @@
 [
     {
-        "rule_id": "c08cbc2c-7b58-424e-b32f-7ac91faed541",
-        "name": "12",
-        "description": "12",
+        "rule_id": "977e1b5f-e7a0-4160-8ee9-6d88cfae9e5a",
+        "name": "sdf",
+        "description": "sdf",
         "conditions": {
             "when": {
-                "type": "loitering",
+                "type": "exit",
                 "object": "CAR",
-                "zoneId": "zone-1775834472281",
-                "durationSeconds": 10,
-                "not": false
+                "not": false,
+                "zoneId": "zone-1775844563058"
             },
             "actions": [
                 "notification"
