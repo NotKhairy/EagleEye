@@ -4,6 +4,8 @@ import json
 from ultralytics import YOLO
 import time
 from mailService import MailService
+import os
+import plyer
 
 
 def _bgr_face_crop_from_person_bbox(frame, x1, y1, x2, y2):
@@ -204,9 +206,20 @@ class ObjectDetector:
 
         elif node_type == "loitering":
             threshold = float(node.get("durationSeconds") or 10)
+            matched_track_ids = []
             for det, elapsed in zone_state.get("inside", []):
                 if elapsed >= threshold and self._match_label(expected_object, det):
                     results.append(det)
+                    matched_track_ids.append(det.get("track_id"))
+
+            if results and not bool(node.get("not", False)):
+                now = time.time()
+                inside_map = zone_state.get("inside_map", {})
+                for track_id in matched_track_ids:
+                    payload = inside_map.get(track_id)
+                    if payload is not None:
+                        payload["entered_at"] = now
+                        payload["last_seen"] = now
 
         fired = len(results) > 0
         if bool(node.get("not", False)):
@@ -337,20 +350,17 @@ class ObjectDetector:
     def _handle_desktop_push(self, rule_event, detection):
         """Send a desktop push notification."""
         try:
-            from win10toast import ToastNotifier
-            toaster = ToastNotifier()
+            from plyer import notification
+
             rule_name = rule_event.get("rule_name", "Unnamed rule")
             message = f"Rule '{rule_name}' triggered by {detection['label']} (ID: {detection['track_id']})"
-            toaster.show_toast(
+            notification.notify(
                 title="EagleEye Detection Alert",
-                msg=message,
-                duration=5,
-                threaded=True
+                message=message,
+                timeout=5
             )
-        except ImportError:
-            print("[MOCK - desktopPush] win10toast not installed. Install with: pip install win10toast")
-            print(f"[MOCK - desktopPush] Rule '{rule_event.get('rule_name')}' - {detection['label']} ID: {detection['track_id']}")
-    
+        except Exception as e:
+            print(f"[ERROR] Failed to send desktop notification: {e}")  
     def _handle_email(self, rule_event, detection, email_address, snapshot):
         rule_name = rule_event.get("rule_name", "Unnamed rule")
         self.mail_service.send_email(

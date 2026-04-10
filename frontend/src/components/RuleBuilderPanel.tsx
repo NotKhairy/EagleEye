@@ -8,6 +8,7 @@ import type {
   RuleObject,
   Zone,
 } from "../types/types";
+import { COCO_CLASS_NAMES } from "../constants/cocoClasses";
 
 type RuleBuilderPanelProps = {
   zones: Zone[];
@@ -37,7 +38,10 @@ const defaultNode = (): DraftNode => ({
   durationSeconds: 10,
 });
 
-const objectOptions: RuleObject[] = ["PERSON", "CAR"];
+const objectOptions: RuleObject[] = COCO_CLASS_NAMES.map((label) =>
+  label.replace(/\s+/g, "_").toUpperCase(),
+);
+
 const eventOptions: ZoneEvent[] = ["enter", "exit", "in_zone", "loitering"];
 
 function createPredicate(node: DraftNode): PredicateNode {

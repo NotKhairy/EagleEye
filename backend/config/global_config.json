@@ -1,6 +1,6 @@
 [
     {
-        "frameSkip": 2,
+        "frameSkip": 10,
         "confidenceThreshold": 0.5
     }
 ]

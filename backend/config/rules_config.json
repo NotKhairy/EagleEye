@@ -1,1 +1,20 @@
-[]
+[
+    {
+        "rule_id": "c08cbc2c-7b58-424e-b32f-7ac91faed541",
+        "name": "12",
+        "description": "12",
+        "conditions": {
+            "when": {
+                "type": "loitering",
+                "object": "CAR",
+                "zoneId": "zone-1775834472281",
+                "durationSeconds": 10,
+                "not": false
+            },
+            "actions": [
+                "notification"
+            ]
+        },
+        "severity": "info"
+    }
+]
