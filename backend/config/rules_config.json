@@ -1,15 +1,14 @@
 [
     {
-        "rule_id": "d9a44cff-53a9-4dba-b26e-f0f95f0193ad",
-        "name": "person",
-        "description": "person",
+        "rule_id": "66bce0b9-0920-4d9c-b3e9-9e021b0b2641",
+        "name": "ads",
+        "description": "ads",
         "conditions": {
             "when": {
-                "type": "loitering",
+                "type": "enter",
                 "object": "PERSON",
-                "zoneId": "zone-1776521145514",
-                "durationSeconds": 5,
-                "not": false
+                "not": false,
+                "zoneId": "zone-1776525161362"
             },
             "actions": [
                 "notification"

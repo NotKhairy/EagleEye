@@ -125,6 +125,8 @@ def _detector_worker_loop(runtime):
                 tracked_objects,
                 runtime.zone_manager,
                 frame=frame,
+                frame_index=frame_index,
+                source_fps=runtime.source_fps,
                 face_recognizer=runtime.face_recognizer,
             )
 

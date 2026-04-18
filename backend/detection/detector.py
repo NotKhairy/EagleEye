@@ -1,6 +1,7 @@
 import cv2
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import json
+import math
 from ultralytics import YOLO
 import time
 from mailService import MailService
@@ -105,15 +106,19 @@ class ObjectDetector:
                 "justExited": [],
                 "inside": [],
                 "inside_map": {},
+                "current_frame_index": 0,
+                "source_fps": 30.0,
             }
             self.zone_runtime_state[zone_id] = state
         return state
 
-    def _update_zone_state_for_frame(self, zone, tracked_objects, zone_manager, now, border_threshold=25.0):
+    def _update_zone_state_for_frame(self, zone, tracked_objects, zone_manager, frame_index, source_fps, now, border_threshold=25.0):
         zone_id = zone["id"]
         state = self._ensure_zone_state(zone_id)
         state["justEntered"] = []
         state["justExited"] = []
+        state["current_frame_index"] = frame_index
+        state["source_fps"] = source_fps
 
         inside_map = state["inside_map"]
         seen_ids = set()
@@ -126,42 +131,43 @@ class ObjectDetector:
             near_border = self._distance_to_polygon_border(point, polygon) <= border_threshold
 
             is_inside = track_id in inside_map
-            if (not is_inside) and in_polygon and near_border:
+            if (not is_inside) and in_polygon:
                 payload = {
                     "detection": detection,
-                    "entered_at": now,
-                    "last_seen": now,
+                    "entered_frame_index": frame_index,
+                    "last_seen_frame_index": frame_index,
                 }
                 inside_map[track_id] = payload
-                state["justEntered"].append(detection)
+                if near_border:
+                    state["justEntered"].append(detection)
                 seen_ids.add(track_id)
                 continue
 
             if is_inside:
                 if in_polygon:
                     inside_map[track_id]["detection"] = detection
-                    inside_map[track_id]["last_seen"] = now
+                    inside_map[track_id]["last_seen_frame_index"] = frame_index
                     seen_ids.add(track_id)
                 elif near_border:
-                    elapsed = now - inside_map[track_id]["entered_at"]
+                    elapsed = frame_index - inside_map[track_id]["entered_frame_index"]
                     exit_detection = dict(detection)
-                    exit_detection["time_elapsed_inside"] = elapsed
+                    exit_detection["frames_inside"] = elapsed
                     state["justExited"].append(exit_detection)
                     inside_map.pop(track_id, None)
 
         # Remove stale entries for tracks that disappeared from view.
-        stale_seconds = 2.0
+        stale_frames = max(1, int(round((source_fps or 30.0) * 2.0)))
         for track_id, payload in list(inside_map.items()):
             if track_id in seen_ids:
                 continue
-            if now - payload["last_seen"] > stale_seconds:
+            if frame_index - payload["last_seen_frame_index"] > stale_frames:
                 inside_map.pop(track_id, None)
 
         state["inside"] = []
         for payload in inside_map.values():
-            elapsed = now - payload["entered_at"]
+            elapsed = frame_index - payload["entered_frame_index"]
             enriched = dict(payload["detection"])
-            enriched["time_elapsed_inside"] = elapsed
+            enriched["frames_inside"] = elapsed
             state["inside"].append((enriched, elapsed))
 
         # Mirror runtime state onto zone object for easier debugging/introspection.
@@ -206,21 +212,23 @@ class ObjectDetector:
                     results.append(det)
 
         elif node_type == "loitering":
-            threshold = float(node.get("durationSeconds") or 10)
+            threshold_seconds = float(node.get("durationSeconds") or 10)
+            fps = float(zone_state.get("source_fps") or 30.0)
+            required_frames = max(1, int(math.ceil(threshold_seconds * fps)))
+            current_frame_index = int(zone_state.get("current_frame_index") or 0)
             matched_track_ids = []
-            for det, elapsed in zone_state.get("inside", []):
-                if elapsed >= threshold and self._match_label(expected_object, det):
+            for det, frames_inside in zone_state.get("inside", []):
+                if frames_inside >= required_frames and self._match_label(expected_object, det):
                     results.append(det)
                     matched_track_ids.append(det.get("track_id"))
 
             if results and not bool(node.get("not", False)):
-                now = time.time()
                 inside_map = zone_state.get("inside_map", {})
                 for track_id in matched_track_ids:
                     payload = inside_map.get(track_id)
                     if payload is not None:
-                        payload["entered_at"] = now
-                        payload["last_seen"] = now
+                        payload["entered_frame_index"] = current_frame_index
+                        payload["last_seen_frame_index"] = current_frame_index
 
         fired = len(results) > 0
         if bool(node.get("not", False)):
@@ -471,7 +479,7 @@ class ObjectDetector:
 
         return annotated
     
-    def check_objects_in_zones(self, tracked_objects, zone_manager, frame=None, face_recognizer=None):
+    def check_objects_in_zones(self, tracked_objects, zone_manager, frame=None, frame_index=0, source_fps=30.0, face_recognizer=None):
         """
         Check if objects are in zones and collect trigger events based on state changes.
         Uses enter/exit rules instead of cooldown timers.
@@ -484,7 +492,7 @@ class ObjectDetector:
         for zone in zone_manager.zones:
             zone_id = zone["id"]
             live_zone_ids.add(zone_id)
-            state = self._update_zone_state_for_frame(zone, tracked_objects, zone_manager, now)
+            state = self._update_zone_state_for_frame(zone, tracked_objects, zone_manager, frame_index, source_fps, now)
             if len(state["inside"]) > 0:
                 zone_manager.set_zone_triggered(zone_id, True)
 

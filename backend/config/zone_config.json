@@ -1,25 +1,25 @@
 [
     {
         "zone_name": "Zone 1",
-        "zone_id": "zone-1776521145514",
+        "zone_id": "zone-1776525161362",
         "description": "Detection zone",
         "trigger": "person",
         "coordinates": [
             [
-                3.0,
-                119.0
+                460.0,
+                666.0
             ],
             [
-                409.0,
-                120.0
+                1007.0,
+                668.0
             ],
             [
-                408.0,
-                475.0
+                1009.0,
+                715.0
             ],
             [
-                5.0,
-                474.0
+                454.0,
+                715.0
             ]
         ],
         "rule": "loitering",

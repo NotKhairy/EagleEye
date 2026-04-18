@@ -27,6 +27,12 @@ export type EventLogEntry = {
   data?: Record<string, unknown>;
 };
 
+export type VideoSourceInfo = {
+  status: "running" | "not_running";
+  source_type: "camera" | "video_file" | "unknown";
+  direct_video_url: string | null;
+};
+
 type RulePayload = {
   rule_id: string;
   name: string;
@@ -217,4 +223,12 @@ export async function getEventLog(limit = 200): Promise<EventLogEntry[]> {
     await throwWithResponse("Failed to load event log", response);
   }
   return (await response.json()) as EventLogEntry[];
+}
+
+export async function getVideoSourceInfo(): Promise<VideoSourceInfo> {
+  const response = await fetch(`${API_BASE}/video_source_info`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to load video source info", response);
+  }
+  return (await response.json()) as VideoSourceInfo;
 }

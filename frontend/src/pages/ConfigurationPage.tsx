@@ -154,6 +154,13 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     setSourceError(null);
     replaceStream(null);
     setUploadedVideoName(file.name);
+    setVideoSource({
+      type: "video_file",
+      previewUrl: objectUrl,
+      name: file.name,
+    });
+    setMediaResolution("N/A");
+    setMediaFPS("N/A");
     
     // Upload the file to backend first
     try {
@@ -170,8 +177,11 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     } catch (err) {
       console.error("[CONFIG] Failed to upload video file:", err);
       setSourceError(`Failed to upload video file: ${err instanceof Error ? err.message : "Unknown error"}`);
-      setVideoSource(null);
-      revokeUploadedVideoUrl();
+      setVideoSource({
+        type: "video_file",
+        previewUrl: objectUrl,
+        name: file.name,
+      });
       return;
     }
 
@@ -270,6 +280,11 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
   const handleStartMonitoring = async (globalConfig: GlobalConfig, videoSourceData: VideoSource, rules: RuleConfig[]) => {
     const handle = zoneCanvasRef.current;
     if (!handle) return;
+
+    if (videoSourceData.type === "video_file" && !videoSourceData.filePath) {
+      setSourceError("Please wait for the video upload to finish before starting monitoring.");
+      return;
+    }
 
     const zones = handle.getZones();
     const { width, height } = handle.getMediaSize();

@@ -1,11 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Union, Literal
 import json
 import os
 import threading
 import time
+import mimetypes
 import cv2
 import shutil
 from uuid import uuid4
@@ -266,6 +267,7 @@ def start_monitoring(payload: StartMonitoringPayload):
         if payload.video_source == "0":
             payload.video_source = 0
         runtime = EagleEyeRuntime(cap=cv2.VideoCapture(payload.video_source))
+        runtime.videoSource = payload.video_source
         _attach_face_to_runtime(runtime)
         runtime.frame_skip = frame_skip
         runtime.confidence_threshold = confidence
@@ -290,6 +292,49 @@ def start_monitoring(payload: StartMonitoringPayload):
         status = get_runtime_status(runtime)
         print(f"[start_monitoring] SUCCESS: Runtime started with status: {status}")
         return {"status": "started", "video_source": payload.video_source, "runtime": status}
+
+
+@app.get("/video_source_info")
+def video_source_info():
+    with runtime_lock:
+        if runtime is None:
+            return {
+                "status": "not_running",
+                "source_type": "unknown",
+                "direct_video_url": None,
+            }
+
+        source = runtime.videoSource
+        if source == 0 or source == "0":
+            return {
+                "status": "running",
+                "source_type": "camera",
+                "direct_video_url": None,
+            }
+
+        return {
+            "status": "running",
+            "source_type": "video_file",
+            "direct_video_url": "/api/video_file",
+        }
+
+
+@app.get("/video_file")
+def video_file():
+    with runtime_lock:
+        if runtime is None:
+            raise HTTPException(status_code=404, detail="Monitoring runtime is not active")
+        source = runtime.videoSource
+
+    if source == 0 or source == "0" or source is None:
+        raise HTTPException(status_code=400, detail="Current monitoring source is not a video file")
+
+    source_path = str(source)
+    if not os.path.exists(source_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {source_path}")
+
+    media_type = mimetypes.guess_type(source_path)[0] or "application/octet-stream"
+    return FileResponse(path=source_path, media_type=media_type, filename=os.path.basename(source_path))
 
 
 @app.post("/stop")

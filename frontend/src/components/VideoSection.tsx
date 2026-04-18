@@ -2,11 +2,12 @@ import { useMemo, useState } from "react";
 import type { Zone } from "../types/types";
 
 type VideoPlayerProps = {
-    src: string;
+    streamSrc: string;
+    directVideoSrc?: string | null;
     zones?: Zone[];
 };
 
-export default function VideoSection({ src, zones = [] }: VideoPlayerProps) {
+export default function VideoSection({ streamSrc, directVideoSrc = null, zones = [] }: VideoPlayerProps) {
     const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
 
     const zoneElements = useMemo(() => {
@@ -22,22 +23,43 @@ export default function VideoSection({ src, zones = [] }: VideoPlayerProps) {
     return (
         <div className="h-full w-full p-4 flex flex-col">
             <div className="h-full w-full overflow-hidden rounded-lg border border-gray-800 bg-black relative">
-                <img
-                    src={src}
-                    alt="Model output stream"
-                    className="h-full w-full object-contain"
-                    crossOrigin="anonymous"
-                    onLoad={(event) => {
-                        const img = event.currentTarget;
-                        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-                            setFrameSize({ width: img.naturalWidth, height: img.naturalHeight });
-                        }
-                        console.log("✓ Video stream connected");
-                    }}
-                    onError={() => {
-                        console.error("✗ Failed to load video stream from:", src);
-                    }}
-                />
+                {directVideoSrc ? (
+                    <video
+                        src={directVideoSrc}
+                        className="h-full w-full object-contain"
+                        controls
+                        autoPlay
+                        muted
+                        playsInline
+                        onLoadedMetadata={(event) => {
+                            const video = event.currentTarget;
+                            if (video.videoWidth > 0 && video.videoHeight > 0) {
+                                setFrameSize({ width: video.videoWidth, height: video.videoHeight });
+                            }
+                            console.log("✓ Direct video connected");
+                        }}
+                        onError={() => {
+                            console.error("✗ Failed to load direct video from:", directVideoSrc);
+                        }}
+                    />
+                ) : (
+                    <img
+                        src={streamSrc}
+                        alt="Model output stream"
+                        className="h-full w-full object-contain"
+                        crossOrigin="anonymous"
+                        onLoad={(event) => {
+                            const img = event.currentTarget;
+                            if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                                setFrameSize({ width: img.naturalWidth, height: img.naturalHeight });
+                            }
+                            console.log("✓ Video stream connected");
+                        }}
+                        onError={() => {
+                            console.error("✗ Failed to load video stream from:", streamSrc);
+                        }}
+                    />
+                )}
                 {frameSize && zoneElements.length > 0 ? (
                     <svg
                         className="pointer-events-none absolute inset-0 h-full w-full"
@@ -77,7 +99,7 @@ export default function VideoSection({ src, zones = [] }: VideoPlayerProps) {
                     </svg>
                 ) : null}
                 <div className="absolute bottom-4 left-4 text-xs text-gray-400 bg-black bg-opacity-50 px-2 py-1 rounded">
-                    Live Stream
+                    {directVideoSrc ? "Direct Playback" : "Live Stream"}
                 </div>
             </div>
         </div>
