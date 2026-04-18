@@ -2,6 +2,8 @@ import json
 import cv2
 import threading
 import os
+import queue
+import time
 from datetime import datetime
 from detection.detector import ObjectDetector
 from detection.zone_logic import ZoneManager
@@ -28,6 +30,34 @@ def _zones_require_face_identity(zone_manager) -> bool:
     return False
 
 
+EVENT_LOG_HISTORY = []
+EVENT_LOG_LOCK = threading.Lock()
+
+
+def append_runtime_log(runtime, message, level="info", category="system", data=None):
+    """Append a structured message to the shared runtime event log."""
+    entry = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "level": level,
+        "category": category,
+        "message": message,
+        "data": data or {},
+    }
+    with EVENT_LOG_LOCK:
+        EVENT_LOG_HISTORY.append(entry)
+        if len(EVENT_LOG_HISTORY) > 250:
+            del EVENT_LOG_HISTORY[:-250]
+    return entry
+
+
+def get_event_log_history(limit=200):
+    """Return a copy of the most recent event log entries."""
+    with EVENT_LOG_LOCK:
+        if limit is None or limit <= 0:
+            return list(EVENT_LOG_HISTORY)
+        return list(EVENT_LOG_HISTORY[-limit:])
+
+
 class EagleEyeRuntime:
     """Holds runtime state for the detection loop."""
 
@@ -48,8 +78,105 @@ class EagleEyeRuntime:
         self.tracked_objects = []
         self.last_zone_triggered = False
         self.latest_annotated_frame = None
+        self.latest_stream_frame = None
+        self.pending_annotated_frame = None
+        self.pending_annotated_frame_index = 0
+        self.latest_stream_frame_index = 0
+        self.annotation_gate_index = 0
         self.last_trigger_events = []
+        self.event_log = EVENT_LOG_HISTORY
         self.videoSource = 0  # Store trigger events until they're executed
+        self.last_detection_frame_index = 0
+        self.detector_busy = False
+        self.state_lock = threading.Lock()
+        self.detector_job_queue = queue.Queue(maxsize=1)
+        self.detector_worker_stop = threading.Event()
+        self.detector_worker = threading.Thread(
+            target=_detector_worker_loop,
+            args=(self,),
+            daemon=True,
+        )
+        self.detector_worker.start()
+
+        fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        if fps <= 0.0 or fps > 120.0:
+            fps = 30.0
+        self.source_fps = fps
+        self.frame_interval_seconds = 1.0 / fps
+
+
+def _detector_worker_loop(runtime):
+    """Run detector jobs asynchronously so capture/streaming stays smooth."""
+    while not runtime.detector_worker_stop.is_set():
+        try:
+            job = runtime.detector_job_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+
+        if job is None:
+            runtime.detector_job_queue.task_done()
+            break
+
+        frame_index, frame = job
+        try:
+            tracked_objects = runtime.detector.track(frame)
+
+            zone_result = runtime.detector.check_objects_in_zones(
+                tracked_objects,
+                runtime.zone_manager,
+                frame=frame,
+                face_recognizer=runtime.face_recognizer,
+            )
+
+            trigger_events = zone_result["trigger_events"]
+            if trigger_events:
+                highlighted_zone_ids = sorted({
+                    zone_id
+                    for event in trigger_events
+                    for zone_id in (event.get("zone_ids") or [])
+                })
+                alert_frame = runtime.detector.draw_alert_snapshot(
+                    frame,
+                    tracked_objects,
+                    runtime.zone_manager,
+                    highlighted_zone_ids=highlighted_zone_ids,
+                    font_scale=0.45,
+                    line_width=2,
+                )
+                snapshot_path = save_snapshot(alert_frame, runtime.snapshot_dir)
+                if snapshot_path:
+                    runtime.detector.execute_trigger_events(trigger_events, snapshot_path)
+                    for event in trigger_events:
+                        matched_objects = event.get("matched_objects") or []
+                        object_summary = ", ".join(
+                            f"{obj.get('label', 'object')}#{obj.get('track_id', 'n/a')}"
+                            for obj in matched_objects[:3]
+                        ) or "object"
+                        append_runtime_log(
+                            runtime,
+                            f"Rule '{event.get('rule_name', 'Unnamed rule')}' triggered by {object_summary}",
+                            level="alert",
+                            category="trigger",
+                            data={
+                                "rule_id": event.get("rule_id"),
+                                "zone_ids": event.get("zone_ids") or [],
+                                "snapshot_path": snapshot_path,
+                            },
+                        )
+
+            with runtime.state_lock:
+                runtime.tracked_objects = tracked_objects
+                runtime.last_zone_triggered = zone_result["any_triggered"]
+                runtime.last_trigger_events = trigger_events
+                runtime.last_detection_frame_index = frame_index
+        except Exception as e:
+            print(f"[ERROR] Detector worker failed: {e}")
+            with runtime.state_lock:
+                runtime.last_detection_frame_index = frame_index
+        finally:
+            with runtime.state_lock:
+                runtime.detector_busy = False
+            runtime.detector_job_queue.task_done()
 
 
 
@@ -62,36 +189,31 @@ def process_next_frame(runtime):
 
     runtime.frame_index += 1
 
-    # Perform detection/tracking.
+    with runtime.state_lock:
+        runtime.latest_stream_frame = frame.copy()
+        runtime.latest_stream_frame_index = runtime.frame_index
+
+    # Always stream raw frames; run detector only on configured cadence.
     skip = runtime.frame_skip if runtime.frame_skip >= 1 else 1
     run_track = (runtime.frame_index % skip == 0) or _zones_require_face_identity(runtime.zone_manager)
     if run_track:
-        runtime.tracked_objects = runtime.detector.track(frame)
+        with runtime.state_lock:
+            can_enqueue = not runtime.detector_busy
+            if can_enqueue:
+                runtime.detector_busy = True
 
-    annotated_frame = runtime.detector.draw_tracks(
-        frame,
-        runtime.tracked_objects,
-        font_scale=0.4,
-        line_width=1,
-    )
+        if can_enqueue:
+            try:
+                runtime.detector_job_queue.put_nowait((runtime.frame_index, frame.copy()))
+                with runtime.state_lock:
+                    runtime.annotation_gate_index = runtime.frame_index
+            except queue.Full:
+                with runtime.state_lock:
+                    runtime.detector_busy = False
 
-    # Check if matching objects are in any zones (collect triggers, don't execute yet).
-    zone_result = runtime.detector.check_objects_in_zones(
-        runtime.tracked_objects,
-        runtime.zone_manager,
-        frame=frame,
-        face_recognizer=runtime.face_recognizer,
-    )
-    runtime.last_zone_triggered = zone_result["any_triggered"]
-    runtime.last_trigger_events = zone_result["trigger_events"]
-
-    runtime.latest_annotated_frame = annotated_frame.copy()
-
-    # Save the annotated frame and execute triggers ONLY if there are trigger events.
-    if runtime.last_trigger_events:
-        snapshot_path = save_snapshot(annotated_frame, runtime.snapshot_dir)
-        if snapshot_path:
-            runtime.detector.execute_trigger_events(runtime.last_trigger_events, snapshot_path)
+    # Keep compatibility for existing readers that expect latest_annotated_frame.
+    with runtime.state_lock:
+        runtime.latest_annotated_frame = runtime.latest_stream_frame
 
     return True
 
@@ -138,6 +260,8 @@ def handle_key_input(runtime, key):
 def run_loop(runtime, stop_event=None):
     """Run the frame processing loop until stop condition is met."""
     while True:
+        tick_start = time.time()
+
         if stop_event is not None and stop_event.is_set():
             break
 
@@ -149,9 +273,21 @@ def run_loop(runtime, stop_event=None):
         if not handle_key_input(runtime, key):
             break
 
+        elapsed = time.time() - tick_start
+        remaining = runtime.frame_interval_seconds - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+
 
 def close_runtime(runtime):
     """Release resources for a runtime instance."""
+    runtime.detector_worker_stop.set()
+    try:
+        runtime.detector_job_queue.put_nowait(None)
+    except queue.Full:
+        pass
+    if runtime.detector_worker is not None and runtime.detector_worker.is_alive():
+        runtime.detector_worker.join(timeout=2)
     runtime.cap.release()
     if runtime.show_window:
         cv2.destroyAllWindows()
@@ -167,6 +303,8 @@ def get_runtime_status(runtime):
         "triggered_count": triggered_count,
         "tracked_count": len(runtime.tracked_objects),
         "any_zone_triggered": runtime.last_zone_triggered,
+        "detector_busy": runtime.detector_busy,
+        "last_detection_frame_index": runtime.last_detection_frame_index,
         "show_window": runtime.show_window,
     }
 

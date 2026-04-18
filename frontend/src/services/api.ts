@@ -19,6 +19,14 @@ export type GlobalConfig = {
   confidenceThreshold: number;
 };
 
+export type EventLogEntry = {
+  timestamp: string;
+  level: string;
+  category: string;
+  message: string;
+  data?: Record<string, unknown>;
+};
+
 type RulePayload = {
   rule_id: string;
   name: string;
@@ -201,4 +209,12 @@ export async function stopMonitoring(): Promise<void> {
   if (!response.ok) {
     await throwWithResponse("Failed to stop monitoring", response);
   }
+}
+
+export async function getEventLog(limit = 200): Promise<EventLogEntry[]> {
+  const response = await fetch(`${API_BASE}/event_log?limit=${encodeURIComponent(String(limit))}`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to load event log", response);
+  }
+  return (await response.json()) as EventLogEntry[];
 }

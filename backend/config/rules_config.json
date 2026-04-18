@@ -1,14 +1,14 @@
 [
     {
-        "rule_id": "c08cbc2c-7b58-424e-b32f-7ac91faed541",
-        "name": "12",
-        "description": "12",
+        "rule_id": "d9a44cff-53a9-4dba-b26e-f0f95f0193ad",
+        "name": "person",
+        "description": "person",
         "conditions": {
             "when": {
                 "type": "loitering",
-                "object": "CAR",
-                "zoneId": "zone-1775834472281",
-                "durationSeconds": 10,
+                "object": "PERSON",
+                "zoneId": "zone-1776521145514",
+                "durationSeconds": 5,
                 "not": false
             },
             "actions": [

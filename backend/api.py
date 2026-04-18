@@ -11,7 +11,9 @@ import shutil
 from uuid import uuid4
 from main import (
     EagleEyeRuntime,
+    append_runtime_log,
     close_runtime,
+    get_event_log_history,
     get_runtime_status,
     run_loop_in_thread,
 )
@@ -102,8 +104,10 @@ def video_feed():
         while True:
             frame = None
             with runtime_lock:
-                if runtime is not None and runtime.latest_annotated_frame is not None:
-                    frame = runtime.latest_annotated_frame.copy()
+                if runtime is not None:
+                    with runtime.state_lock:
+                        if runtime.latest_stream_frame is not None:
+                            frame = runtime.latest_stream_frame.copy()
 
             if frame is None:
                 startup_delay += 0.05
@@ -133,6 +137,11 @@ def video_feed():
         generate(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@app.get("/event_log")
+def event_log(limit: int = 200):
+    return get_event_log_history(limit)
 
 
 class GlobalConfigPayload(BaseModel):
@@ -180,6 +189,7 @@ def initialize(
         stop_event = threading.Event()
         runtime = EagleEyeRuntime(cap=cv2.VideoCapture(video_source))
         _attach_face_to_runtime(runtime)
+        append_runtime_log(runtime, f"Monitoring initialized from {video_source}", category="system")
 
         return {"status": "initialized", "runtime": get_runtime_status(runtime)}
 
@@ -203,6 +213,7 @@ def start():
                 return {"status": "error", "message": "Could not initialize video source (file and webcam fallback failed)"}
 
         stop_event.clear()
+        append_runtime_log(runtime, "Monitoring started from webcam", category="system")
         worker_thread = threading.Thread(
             target=run_loop_in_thread,
             args=(runtime, stop_event),
@@ -264,6 +275,8 @@ def start_monitoring(payload: StartMonitoringPayload):
             error_msg = f"Could not initialize video source: {payload.video_source}"
             print(f"[start_monitoring] ERROR: {error_msg}")
             return {"status": "error", "message": error_msg}
+
+        append_runtime_log(runtime, f"Monitoring started from {payload.video_source}", category="system")
         
         # Start the processing loop in a background thread
         print("[start_monitoring] Starting processing loop thread...")
@@ -285,12 +298,15 @@ def stop():
     with runtime_lock:
         if worker_thread is None or not worker_thread.is_alive():
             if runtime is not None:
+                append_runtime_log(runtime, "Monitoring stopped", category="system")
                 close_runtime(runtime)
                 runtime = None
             return {"status": "not running"}
 
         stop_event.set()
         worker_thread.join(timeout=2)
+        if runtime is not None:
+            append_runtime_log(runtime, "Monitoring stopped", category="system")
         worker_thread = None
         runtime = None
         return {"status": "stopped"}

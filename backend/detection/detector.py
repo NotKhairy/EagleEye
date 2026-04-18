@@ -6,6 +6,7 @@ import time
 from mailService import MailService
 import os
 import plyer
+import numpy as np
 
 
 def _bgr_face_crop_from_person_bbox(frame, x1, y1, x2, y2):
@@ -267,6 +268,27 @@ class ObjectDetector:
             return False, []
 
         return False, []
+
+    def _collect_zone_ids(self, node):
+        """Collect all zone IDs referenced by a rule node tree."""
+        if not isinstance(node, dict):
+            return set()
+
+        zone_ids = set()
+        zone_id = node.get("zoneId")
+        if zone_id is not None:
+            zone_ids.add(zone_id)
+
+        child = node.get("child")
+        if child is not None:
+            zone_ids.update(self._collect_zone_ids(child))
+
+        children = node.get("children")
+        if isinstance(children, list):
+            for item in children:
+                zone_ids.update(self._collect_zone_ids(item))
+
+        return zone_ids
     
     def track(self, frame):
         """Run YOLO detection, then DeepSORT tracking for persistent IDs."""
@@ -400,6 +422,54 @@ class ObjectDetector:
                 cv2.LINE_AA,
             )
         return annotated
+
+    def draw_alert_snapshot(self, frame, tracked_objects, zone_manager, highlighted_zone_ids=None, font_scale=0.45, line_width=2):
+        """Draw an alert snapshot with tracked objects and highlighted zones only."""
+        annotated = frame.copy()
+        highlighted = {str(zone_id) for zone_id in (highlighted_zone_ids or [])}
+
+        for zone in zone_manager.zones:
+            coordinates = zone.get("coordinates") or []
+            if len(coordinates) < 3:
+                continue
+
+            polygon = [tuple(point) for point in coordinates]
+            contour = np.array(polygon, dtype=np.int32)
+            is_highlighted = str(zone.get("id")) in highlighted
+            color = (0, 215, 255) if is_highlighted else (120, 120, 120)
+            thickness = line_width + 1 if is_highlighted else 1
+
+            cv2.polylines(annotated, [contour], True, color, thickness, cv2.LINE_AA)
+            anchor_x, anchor_y = polygon[0]
+            label = zone.get("name", f"Zone {zone.get('id', '?')}")
+            cv2.putText(
+                annotated,
+                label,
+                (int(anchor_x) + 8, max(int(anchor_y) - 10, 18)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+
+        for obj in tracked_objects:
+            x1, y1, x2, y2 = obj["bbox"]
+            label_text = f"{obj['label']} {obj['track_id']} {obj['confidence']:.2f}"
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), line_width)
+            text_origin = (x1, max(18, y1 - 8))
+            cv2.putText(
+                annotated,
+                label_text,
+                text_origin,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                (0, 255, 0),
+                line_width,
+                cv2.LINE_AA,
+            )
+
+        return annotated
     
     def check_objects_in_zones(self, tracked_objects, zone_manager, frame=None, face_recognizer=None):
         """
@@ -440,6 +510,7 @@ class ObjectDetector:
                 "actions": actions,
                 "matched_objects": matched_objects,
                 "timestamp": now,
+                "zone_ids": sorted(self._collect_zone_ids(when_node)),
             }
             trigger_events.append(event)
 
