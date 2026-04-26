@@ -1,17 +1,20 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Union, Literal
 import json
 import os
 import threading
 import time
+import mimetypes
 import cv2
 import shutil
 from uuid import uuid4
 from main import (
     EagleEyeRuntime,
+    append_runtime_log,
     close_runtime,
+    get_event_log_history,
     get_runtime_status,
     run_loop_in_thread,
 )
@@ -102,8 +105,10 @@ def video_feed():
         while True:
             frame = None
             with runtime_lock:
-                if runtime is not None and runtime.latest_annotated_frame is not None:
-                    frame = runtime.latest_annotated_frame.copy()
+                if runtime is not None:
+                    with runtime.state_lock:
+                        if runtime.latest_stream_frame is not None:
+                            frame = runtime.latest_stream_frame.copy()
 
             if frame is None:
                 startup_delay += 0.05
@@ -133,6 +138,11 @@ def video_feed():
         generate(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@app.get("/event_log")
+def event_log(limit: int = 200):
+    return get_event_log_history(limit)
 
 
 class GlobalConfigPayload(BaseModel):
@@ -180,6 +190,7 @@ def initialize(
         stop_event = threading.Event()
         runtime = EagleEyeRuntime(cap=cv2.VideoCapture(video_source))
         _attach_face_to_runtime(runtime)
+        append_runtime_log(runtime, f"Monitoring initialized from {video_source}", category="system")
 
         return {"status": "initialized", "runtime": get_runtime_status(runtime)}
 
@@ -203,6 +214,7 @@ def start():
                 return {"status": "error", "message": "Could not initialize video source (file and webcam fallback failed)"}
 
         stop_event.clear()
+        append_runtime_log(runtime, "Monitoring started from webcam", category="system")
         worker_thread = threading.Thread(
             target=run_loop_in_thread,
             args=(runtime, stop_event),
@@ -255,6 +267,7 @@ def start_monitoring(payload: StartMonitoringPayload):
         if payload.video_source == "0":
             payload.video_source = 0
         runtime = EagleEyeRuntime(cap=cv2.VideoCapture(payload.video_source))
+        runtime.videoSource = payload.video_source
         _attach_face_to_runtime(runtime)
         runtime.frame_skip = frame_skip
         runtime.confidence_threshold = confidence
@@ -264,6 +277,8 @@ def start_monitoring(payload: StartMonitoringPayload):
             error_msg = f"Could not initialize video source: {payload.video_source}"
             print(f"[start_monitoring] ERROR: {error_msg}")
             return {"status": "error", "message": error_msg}
+
+        append_runtime_log(runtime, f"Monitoring started from {payload.video_source}", category="system")
         
         # Start the processing loop in a background thread
         print("[start_monitoring] Starting processing loop thread...")
@@ -279,18 +294,64 @@ def start_monitoring(payload: StartMonitoringPayload):
         return {"status": "started", "video_source": payload.video_source, "runtime": status}
 
 
+@app.get("/video_source_info")
+def video_source_info():
+    with runtime_lock:
+        if runtime is None:
+            return {
+                "status": "not_running",
+                "source_type": "unknown",
+                "direct_video_url": None,
+            }
+
+        source = runtime.videoSource
+        if source == 0 or source == "0":
+            return {
+                "status": "running",
+                "source_type": "camera",
+                "direct_video_url": None,
+            }
+
+        return {
+            "status": "running",
+            "source_type": "video_file",
+            "direct_video_url": "/api/video_file",
+        }
+
+
+@app.get("/video_file")
+def video_file():
+    with runtime_lock:
+        if runtime is None:
+            raise HTTPException(status_code=404, detail="Monitoring runtime is not active")
+        source = runtime.videoSource
+
+    if source == 0 or source == "0" or source is None:
+        raise HTTPException(status_code=400, detail="Current monitoring source is not a video file")
+
+    source_path = str(source)
+    if not os.path.exists(source_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {source_path}")
+
+    media_type = mimetypes.guess_type(source_path)[0] or "application/octet-stream"
+    return FileResponse(path=source_path, media_type=media_type, filename=os.path.basename(source_path))
+
+
 @app.post("/stop")
 def stop():
     global runtime, worker_thread, stop_event
     with runtime_lock:
         if worker_thread is None or not worker_thread.is_alive():
             if runtime is not None:
+                append_runtime_log(runtime, "Monitoring stopped", category="system")
                 close_runtime(runtime)
                 runtime = None
             return {"status": "not running"}
 
         stop_event.set()
         worker_thread.join(timeout=2)
+        if runtime is not None:
+            append_runtime_log(runtime, "Monitoring stopped", category="system")
         worker_thread = None
         runtime = None
         return {"status": "stopped"}

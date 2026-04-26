@@ -1,11 +1,13 @@
 import cv2
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import json
+import math
 from ultralytics import YOLO
 import time
 from mailService import MailService
 import os
 import plyer
+import numpy as np
 
 
 def _bgr_face_crop_from_person_bbox(frame, x1, y1, x2, y2):
@@ -104,15 +106,19 @@ class ObjectDetector:
                 "justExited": [],
                 "inside": [],
                 "inside_map": {},
+                "current_frame_index": 0,
+                "source_fps": 30.0,
             }
             self.zone_runtime_state[zone_id] = state
         return state
 
-    def _update_zone_state_for_frame(self, zone, tracked_objects, zone_manager, now, border_threshold=25.0):
+    def _update_zone_state_for_frame(self, zone, tracked_objects, zone_manager, frame_index, source_fps, now, border_threshold=25.0):
         zone_id = zone["id"]
         state = self._ensure_zone_state(zone_id)
         state["justEntered"] = []
         state["justExited"] = []
+        state["current_frame_index"] = frame_index
+        state["source_fps"] = source_fps
 
         inside_map = state["inside_map"]
         seen_ids = set()
@@ -125,42 +131,43 @@ class ObjectDetector:
             near_border = self._distance_to_polygon_border(point, polygon) <= border_threshold
 
             is_inside = track_id in inside_map
-            if (not is_inside) and in_polygon and near_border:
+            if (not is_inside) and in_polygon:
                 payload = {
                     "detection": detection,
-                    "entered_at": now,
-                    "last_seen": now,
+                    "entered_frame_index": frame_index,
+                    "last_seen_frame_index": frame_index,
                 }
                 inside_map[track_id] = payload
-                state["justEntered"].append(detection)
+                if near_border:
+                    state["justEntered"].append(detection)
                 seen_ids.add(track_id)
                 continue
 
             if is_inside:
                 if in_polygon:
                     inside_map[track_id]["detection"] = detection
-                    inside_map[track_id]["last_seen"] = now
+                    inside_map[track_id]["last_seen_frame_index"] = frame_index
                     seen_ids.add(track_id)
                 elif near_border:
-                    elapsed = now - inside_map[track_id]["entered_at"]
+                    elapsed = frame_index - inside_map[track_id]["entered_frame_index"]
                     exit_detection = dict(detection)
-                    exit_detection["time_elapsed_inside"] = elapsed
+                    exit_detection["frames_inside"] = elapsed
                     state["justExited"].append(exit_detection)
                     inside_map.pop(track_id, None)
 
         # Remove stale entries for tracks that disappeared from view.
-        stale_seconds = 2.0
+        stale_frames = max(1, int(round((source_fps or 30.0) * 2.0)))
         for track_id, payload in list(inside_map.items()):
             if track_id in seen_ids:
                 continue
-            if now - payload["last_seen"] > stale_seconds:
+            if frame_index - payload["last_seen_frame_index"] > stale_frames:
                 inside_map.pop(track_id, None)
 
         state["inside"] = []
         for payload in inside_map.values():
-            elapsed = now - payload["entered_at"]
+            elapsed = frame_index - payload["entered_frame_index"]
             enriched = dict(payload["detection"])
-            enriched["time_elapsed_inside"] = elapsed
+            enriched["frames_inside"] = elapsed
             state["inside"].append((enriched, elapsed))
 
         # Mirror runtime state onto zone object for easier debugging/introspection.
@@ -205,21 +212,23 @@ class ObjectDetector:
                     results.append(det)
 
         elif node_type == "loitering":
-            threshold = float(node.get("durationSeconds") or 10)
+            threshold_seconds = float(node.get("durationSeconds") or 10)
+            fps = float(zone_state.get("source_fps") or 30.0)
+            required_frames = max(1, int(math.ceil(threshold_seconds * fps)))
+            current_frame_index = int(zone_state.get("current_frame_index") or 0)
             matched_track_ids = []
-            for det, elapsed in zone_state.get("inside", []):
-                if elapsed >= threshold and self._match_label(expected_object, det):
+            for det, frames_inside in zone_state.get("inside", []):
+                if frames_inside >= required_frames and self._match_label(expected_object, det):
                     results.append(det)
                     matched_track_ids.append(det.get("track_id"))
 
             if results and not bool(node.get("not", False)):
-                now = time.time()
                 inside_map = zone_state.get("inside_map", {})
                 for track_id in matched_track_ids:
                     payload = inside_map.get(track_id)
                     if payload is not None:
-                        payload["entered_at"] = now
-                        payload["last_seen"] = now
+                        payload["entered_frame_index"] = current_frame_index
+                        payload["last_seen_frame_index"] = current_frame_index
 
         fired = len(results) > 0
         if bool(node.get("not", False)):
@@ -267,6 +276,27 @@ class ObjectDetector:
             return False, []
 
         return False, []
+
+    def _collect_zone_ids(self, node):
+        """Collect all zone IDs referenced by a rule node tree."""
+        if not isinstance(node, dict):
+            return set()
+
+        zone_ids = set()
+        zone_id = node.get("zoneId")
+        if zone_id is not None:
+            zone_ids.add(zone_id)
+
+        child = node.get("child")
+        if child is not None:
+            zone_ids.update(self._collect_zone_ids(child))
+
+        children = node.get("children")
+        if isinstance(children, list):
+            for item in children:
+                zone_ids.update(self._collect_zone_ids(item))
+
+        return zone_ids
     
     def track(self, frame):
         """Run YOLO detection, then DeepSORT tracking for persistent IDs."""
@@ -400,8 +430,56 @@ class ObjectDetector:
                 cv2.LINE_AA,
             )
         return annotated
+
+    def draw_alert_snapshot(self, frame, tracked_objects, zone_manager, highlighted_zone_ids=None, font_scale=0.45, line_width=2):
+        """Draw an alert snapshot with tracked objects and highlighted zones only."""
+        annotated = frame.copy()
+        highlighted = {str(zone_id) for zone_id in (highlighted_zone_ids or [])}
+
+        for zone in zone_manager.zones:
+            coordinates = zone.get("coordinates") or []
+            if len(coordinates) < 3:
+                continue
+
+            polygon = [tuple(point) for point in coordinates]
+            contour = np.array(polygon, dtype=np.int32)
+            is_highlighted = str(zone.get("id")) in highlighted
+            color = (0, 215, 255) if is_highlighted else (120, 120, 120)
+            thickness = line_width + 1 if is_highlighted else 1
+
+            cv2.polylines(annotated, [contour], True, color, thickness, cv2.LINE_AA)
+            anchor_x, anchor_y = polygon[0]
+            label = zone.get("name", f"Zone {zone.get('id', '?')}")
+            cv2.putText(
+                annotated,
+                label,
+                (int(anchor_x) + 8, max(int(anchor_y) - 10, 18)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+
+        for obj in tracked_objects:
+            x1, y1, x2, y2 = obj["bbox"]
+            label_text = f"{obj['label']} {obj['track_id']} {obj['confidence']:.2f}"
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), line_width)
+            text_origin = (x1, max(18, y1 - 8))
+            cv2.putText(
+                annotated,
+                label_text,
+                text_origin,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                (0, 255, 0),
+                line_width,
+                cv2.LINE_AA,
+            )
+
+        return annotated
     
-    def check_objects_in_zones(self, tracked_objects, zone_manager, frame=None, face_recognizer=None):
+    def check_objects_in_zones(self, tracked_objects, zone_manager, frame=None, frame_index=0, source_fps=30.0, face_recognizer=None):
         """
         Check if objects are in zones and collect trigger events based on state changes.
         Uses enter/exit rules instead of cooldown timers.
@@ -414,7 +492,7 @@ class ObjectDetector:
         for zone in zone_manager.zones:
             zone_id = zone["id"]
             live_zone_ids.add(zone_id)
-            state = self._update_zone_state_for_frame(zone, tracked_objects, zone_manager, now)
+            state = self._update_zone_state_for_frame(zone, tracked_objects, zone_manager, frame_index, source_fps, now)
             if len(state["inside"]) > 0:
                 zone_manager.set_zone_triggered(zone_id, True)
 
@@ -440,6 +518,7 @@ class ObjectDetector:
                 "actions": actions,
                 "matched_objects": matched_objects,
                 "timestamp": now,
+                "zone_ids": sorted(self._collect_zone_ids(when_node)),
             }
             trigger_events.append(event)
 

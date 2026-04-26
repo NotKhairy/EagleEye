@@ -1,0 +1,19 @@
+[
+    {
+        "rule_id": "66bce0b9-0920-4d9c-b3e9-9e021b0b2641",
+        "name": "ads",
+        "description": "ads",
+        "conditions": {
+            "when": {
+                "type": "enter",
+                "object": "PERSON",
+                "not": false,
+                "zoneId": "zone-1776525161362"
+            },
+            "actions": [
+                "notification"
+            ]
+        },
+        "severity": "info"
+    }
+]
