@@ -25,7 +25,7 @@ def _zones_require_face_identity(zone_manager) -> bool:
     """If true, bboxes must align with the frame used for face crop (avoid frameSkip desync)."""
     for z in zone_manager.zones:
         rule = z.get("personIdentity") or {}
-        if rule.get("mode") in ("whitelist", "blacklist") and (rule.get("personIds") or []):
+        if (rule.get("personIds") or []):
             return True
     return False
 

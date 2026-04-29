@@ -441,7 +441,6 @@ def save_rules(rules: List[RulePayload]):
 # ---------- Zone management ----------
 
 class PersonIdentityPayload(BaseModel):
-    mode: Literal["whitelist", "blacklist"]
     personIds: List[str]
 
 

@@ -30,6 +30,10 @@ export type RuleAction = "notification" | "email";
 export type RuleObject = "PERSON" | "CAR" | string;
 export type ZoneEvent = "enter" | "exit" | "in_zone" | "loitering";
 
+export interface PersonIdentityRule {
+  personIds: string[];
+}
+
 export type RuleNode = LogicalNode | PredicateNode;
 
 export type LogicalNode = 
@@ -49,6 +53,7 @@ export interface EnterZonePredicate {
   object: RuleObject;
   not: boolean;
   zoneId: string;
+  personIdentity?: PersonIdentityRule;
 }
 
 export interface ExitZonePredicate {
@@ -56,6 +61,7 @@ export interface ExitZonePredicate {
   object: RuleObject;
   not: boolean;
   zoneId: string;
+  personIdentity?: PersonIdentityRule;
 }
 
 
@@ -64,6 +70,7 @@ export interface InZonePredicate {
   object: RuleObject;
   zoneId: string;
   not: boolean;
+  personIdentity?: PersonIdentityRule;
 }
 
 
@@ -73,6 +80,7 @@ export interface LoiteringPredicate {
   zoneId: string;
   durationSeconds: number;
   not: boolean;
+  personIdentity?: PersonIdentityRule;
 }
 
 
@@ -115,14 +123,6 @@ export type ZoneTriggerType =
   | "enter"
   | "exit"
   | "loitering";
-
-
-export type PersonIdentityMode = "whitelist" | "blacklist";
-
-export interface PersonIdentityRule {
-  mode: PersonIdentityMode;
-  personIds: string[];
-}
 
 
 /* =========================

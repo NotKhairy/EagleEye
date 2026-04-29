@@ -50,6 +50,9 @@ class ObjectDetector:
         self.zone_runtime_state = {}
         self.mail_service = MailService()
         self.global_config = self._load_global_config()
+        self._eval_frame = None
+        self._eval_face_recognizer = None
+        self._face_match_cache = {}
     
     def _load_global_config(self):
         """Load global config at runtime, not at class definition time."""
@@ -191,6 +194,86 @@ class ObjectDetector:
             return True
         return detection.get("label", "").lower() == expected
 
+    def _get_person_rule(self, node):
+        if not isinstance(node, dict):
+            return None
+        person_rule = node.get("personIdentity") or node.get("personFilter")
+        return person_rule if isinstance(person_rule, dict) else None
+
+    def _identify_person_for_detection(self, detection):
+        if self._eval_face_recognizer is None or self._eval_frame is None:
+            return None
+
+        track_id = detection.get("track_id")
+        if track_id is not None and track_id in self._face_match_cache:
+            return self._face_match_cache[track_id]
+
+        bbox = detection.get("bbox") or ()
+        if len(bbox) != 4:
+            if track_id is not None:
+                self._face_match_cache[track_id] = None
+            return None
+
+        face_crop = _bgr_face_crop_from_person_bbox(self._eval_frame, bbox[0], bbox[1], bbox[2], bbox[3])
+        if face_crop is None:
+            if track_id is not None:
+                self._face_match_cache[track_id] = None
+            return None
+
+        try:
+            match = self._eval_face_recognizer.identify_bgr(face_crop)
+        except Exception as e:
+            print(f"[face] Failed to identify detection {track_id}: {e}")
+            match = None
+
+        if track_id is not None:
+            self._face_match_cache[track_id] = match
+
+        return match
+
+    def _apply_person_identity_filter(self, node, results):
+        person_rule = self._get_person_rule(node)
+        if person_rule is None:
+            return results
+
+        person_ids = {str(person_id) for person_id in (person_rule.get("personIds") or []) if str(person_id).strip()}
+
+        if len(person_ids) == 0:
+            return results
+
+        # Warn if any listed person has no embeddings on disk — common cause for false negatives.
+        try:
+            store = getattr(self._eval_face_recognizer, "known_store", None)
+            if store is not None:
+                for pid in list(person_ids):
+                    emb_path = store.embeddings_path(pid)
+                    if not os.path.exists(emb_path):
+                        print(f"[whitelist] Person {pid} has no embeddings (missing {emb_path}) — upload images to enroll.")
+        except Exception:
+            pass
+
+        filtered = []
+        for detection in results:
+            if str(detection.get("label") or "").lower() != "person":
+                filtered.append(detection)
+                continue
+
+            match = self._identify_person_for_detection(detection)
+            matched_person_id = getattr(match, "person_id", None)
+            is_listed = matched_person_id in person_ids if matched_person_id else False
+
+            # Whitelist behavior only: listed identities are exempt from triggering (skip them).
+            if not is_listed:
+                filtered.append(detection)
+
+            # Debug trace to help diagnose matching issues
+            try:
+                print(f"[filter] zone={node.get('zoneId')} track={detection.get('track_id')} matched={matched_person_id} listed={is_listed}")
+            except Exception:
+                pass
+
+        return filtered
+
     def _evaluate_predicate(self, node, zone_state):
         node_type = str(node.get("type", "")).lower()
         expected_object = node.get("object")
@@ -229,6 +312,8 @@ class ObjectDetector:
                     if payload is not None:
                         payload["entered_frame_index"] = current_frame_index
                         payload["last_seen_frame_index"] = current_frame_index
+
+        results = self._apply_person_identity_filter(node, results)
 
         fired = len(results) > 0
         if bool(node.get("not", False)):
@@ -487,6 +572,9 @@ class ObjectDetector:
         """
         zone_manager.reset_triggers()
         now = time.time()
+        self._eval_frame = frame
+        self._eval_face_recognizer = face_recognizer
+        self._face_match_cache = {}
 
         live_zone_ids = set()
         for zone in zone_manager.zones:
@@ -521,6 +609,9 @@ class ObjectDetector:
                 "zone_ids": sorted(self._collect_zone_ids(when_node)),
             }
             trigger_events.append(event)
+
+        self._eval_frame = None
+        self._eval_face_recognizer = None
 
         return {
             "any_triggered": len(trigger_events) > 0,

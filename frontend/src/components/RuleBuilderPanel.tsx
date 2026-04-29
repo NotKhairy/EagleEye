@@ -1,5 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import type {
+  PersonIdentityMode,
+  PersonIdentityRule,
   RuleConfig,
   RuleNode,
   PredicateNode,
@@ -9,6 +11,12 @@ import type {
   Zone,
 } from "../types/types";
 import { COCO_CLASS_NAMES } from "../constants/cocoClasses";
+import {
+  createPerson,
+  listPeople,
+  type KnownPerson,
+  uploadPersonImages,
+} from "../services/api";
 
 type RuleBuilderPanelProps = {
   zones: Zone[];
@@ -25,6 +33,8 @@ type DraftNode = {
   event: ZoneEvent;
   zoneId: string;
   durationSeconds?: number;
+  personFilterEnabled: boolean;
+  personIds: string[];
 };
 
 type Connector = "AND" | "OR";
@@ -36,6 +46,8 @@ const defaultNode = (): DraftNode => ({
   event: "in_zone",
   zoneId: "",
   durationSeconds: 10,
+  personFilterEnabled: false,
+  personIds: [],
 });
 
 const objectOptions: RuleObject[] = COCO_CLASS_NAMES.map((label) =>
@@ -45,12 +57,20 @@ const objectOptions: RuleObject[] = COCO_CLASS_NAMES.map((label) =>
 const eventOptions: ZoneEvent[] = ["enter", "exit", "in_zone", "loitering"];
 
 function createPredicate(node: DraftNode): PredicateNode {
+  const personIdentity: PersonIdentityRule | undefined =
+    node.object === "PERSON" && node.personFilterEnabled
+      ? {
+          personIds: node.personIds,
+        }
+      : undefined;
+
   if (node.event === "enter") {
     return {
       type: "enter",
       object: node.object,
       not: node.not,
       zoneId: node.zoneId,
+      personIdentity,
     };
   }
 
@@ -60,6 +80,7 @@ function createPredicate(node: DraftNode): PredicateNode {
       object: node.object,
       not: node.not,
       zoneId: node.zoneId,
+      personIdentity,
     };
   }
 
@@ -70,6 +91,7 @@ function createPredicate(node: DraftNode): PredicateNode {
       zoneId: node.zoneId,
       durationSeconds: node.durationSeconds ?? 10,
       not: node.not,
+      personIdentity,
     };
   }
 
@@ -78,6 +100,7 @@ function createPredicate(node: DraftNode): PredicateNode {
     object: node.object,
     zoneId: node.zoneId,
     not: node.not,
+    personIdentity,
   };
 }
 
@@ -101,31 +124,45 @@ function composeRuleTree(nodes: DraftNode[], connectors: Connector[]): RuleNode 
   return currentNode;
 }
 
-function summarizePredicate(node: PredicateNode, zoneNameById: Map<string, string>): string {
+function summarizePredicate(
+  node: PredicateNode,
+  zoneNameById: Map<string, string>,
+  personNameById: Map<string, string>,
+): string {
   const notPart = node.not ? "NOT " : "";
   const zoneName = zoneNameById.get(node.zoneId) ?? node.zoneId;
+  const personIdentity = node.personIdentity;
+  const personFilterSummary = personIdentity && personIdentity.personIds.length > 0
+    ? ` [WHITELIST: ${personIdentity.personIds
+        .map((personId) => personNameById.get(personId) ?? personId)
+        .join(", ")}]`
+    : "";
 
   if (node.type === "loitering") {
-    return `${notPart}${node.object} LOITERING IN ${zoneName} FOR ${node.durationSeconds}s`;
+    return `${notPart}${node.object} LOITERING IN ${zoneName} FOR ${node.durationSeconds}s${personFilterSummary}`;
   }
 
   if (node.type === "in_zone") {
-    return `${notPart}${node.object} IN ${zoneName}`;
+    return `${notPart}${node.object} IN ${zoneName}${personFilterSummary}`;
   }
 
-  return `${notPart}${node.object} ${node.type.toUpperCase()} ${zoneName}`;
+  return `${notPart}${node.object} ${node.type.toUpperCase()} ${zoneName}${personFilterSummary}`;
 }
 
-function summarizeRuleNode(node: RuleNode, zoneNameById: Map<string, string>): string {
+function summarizeRuleNode(
+  node: RuleNode,
+  zoneNameById: Map<string, string>,
+  personNameById: Map<string, string>,
+): string {
   if ("type" in node) {
-    return summarizePredicate(node, zoneNameById);
+    return summarizePredicate(node, zoneNameById, personNameById);
   }
 
   if ("child" in node) {
-    return `NOT (${summarizeRuleNode(node.child, zoneNameById)})`;
+    return `NOT (${summarizeRuleNode(node.child, zoneNameById, personNameById)})`;
   }
 
-  const parts = node.children.map((child) => `(${summarizeRuleNode(child, zoneNameById)})`);
+  const parts = node.children.map((child) => `(${summarizeRuleNode(child, zoneNameById, personNameById)})`);
   return parts.join(` ${node.operator} `);
 }
 
@@ -141,6 +178,33 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
     notification: true,
     email: false,
   });
+  const [knownPeople, setKnownPeople] = useState<KnownPerson[]>([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+  const [peopleError, setPeopleError] = useState<string | null>(null);
+  const [newPersonNameByNode, setNewPersonNameByNode] = useState<Record<string, string>>({});
+  const [creatingPersonByNode, setCreatingPersonByNode] = useState<Record<string, boolean>>({});
+  const [uploadPersonIdByNode, setUploadPersonIdByNode] = useState<Record<string, string>>({});
+  const [uploadFilesByNode, setUploadFilesByNode] = useState<Record<string, File[]>>({});
+  const [uploadingByNode, setUploadingByNode] = useState<Record<string, boolean>>({});
+  const [uploadStatusByNode, setUploadStatusByNode] = useState<Record<string, string>>({});
+
+  const loadPeople = async () => {
+    setPeopleLoading(true);
+    setPeopleError(null);
+    try {
+      const people = await listPeople();
+      setKnownPeople(people);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load people";
+      setPeopleError(message);
+    } finally {
+      setPeopleLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadPeople();
+  }, []);
 
   const canCreateRule = useMemo(() => {
     if (!ruleName.trim()) {
@@ -198,6 +262,36 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
 
       return previousNodes.filter((node) => node.id !== id);
     });
+    setNewPersonNameByNode((previous) => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+    setCreatingPersonByNode((previous) => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+    setUploadPersonIdByNode((previous) => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+    setUploadFilesByNode((previous) => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+    setUploadingByNode((previous) => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+    setUploadStatusByNode((previous) => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
   };
 
   const updateNode = <K extends keyof DraftNode>(
@@ -245,6 +339,96 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
     });
     setConnectors([]);
     setActions({ notification: true, email: false });
+    setNewPersonNameByNode({});
+    setCreatingPersonByNode({});
+    setUploadPersonIdByNode({});
+    setUploadFilesByNode({});
+    setUploadingByNode({});
+    setUploadStatusByNode({});
+  };
+
+  const togglePersonForNode = (nodeId: string, personId: string, checked: boolean) => {
+    setNodes((previous) =>
+      previous.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+        const nextPersonIds = checked
+          ? Array.from(new Set([...node.personIds, personId]))
+          : node.personIds.filter((id) => id !== personId);
+        return {
+          ...node,
+          personIds: nextPersonIds,
+        };
+      }),
+    );
+  };
+
+  const handleCreatePerson = async (nodeId: string) => {
+    const name = (newPersonNameByNode[nodeId] ?? "").trim();
+    if (!name) {
+      setUploadStatusByNode((previous) => ({
+        ...previous,
+        [nodeId]: "Enter a name before creating a person.",
+      }));
+      return;
+    }
+
+    setCreatingPersonByNode((previous) => ({ ...previous, [nodeId]: true }));
+    setUploadStatusByNode((previous) => ({ ...previous, [nodeId]: "Creating person..." }));
+    try {
+      const created = await createPerson(name);
+      setKnownPeople((previous) => [created, ...previous]);
+      setNodes((previous) =>
+        previous.map((node) =>
+          node.id === nodeId
+            ? {
+                ...node,
+                personIds: Array.from(new Set([...node.personIds, created.id])),
+              }
+            : node,
+        ),
+      );
+      setNewPersonNameByNode((previous) => ({ ...previous, [nodeId]: "" }));
+      setUploadPersonIdByNode((previous) => ({ ...previous, [nodeId]: created.id }));
+      setUploadStatusByNode((previous) => ({
+        ...previous,
+        [nodeId]: `Created ${created.name}. Upload photos to complete enrollment.`,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to create person";
+      setUploadStatusByNode((previous) => ({ ...previous, [nodeId]: message }));
+    } finally {
+      setCreatingPersonByNode((previous) => ({ ...previous, [nodeId]: false }));
+    }
+  };
+
+  const handleUploadImages = async (nodeId: string) => {
+    const personId = uploadPersonIdByNode[nodeId] || "";
+    const files = uploadFilesByNode[nodeId] || [];
+    if (!personId || files.length === 0) {
+      setUploadStatusByNode((previous) => ({
+        ...previous,
+        [nodeId]: "Select a person and at least one image.",
+      }));
+      return;
+    }
+
+    setUploadingByNode((previous) => ({ ...previous, [nodeId]: true }));
+    setUploadStatusByNode((previous) => ({ ...previous, [nodeId]: "Uploading and enrolling images..." }));
+    try {
+      await uploadPersonImages(personId, files);
+      setUploadFilesByNode((previous) => ({ ...previous, [nodeId]: [] }));
+      setUploadStatusByNode((previous) => ({
+        ...previous,
+        [nodeId]: `Enrollment updated with ${files.length} image(s).`,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to upload images";
+      setUploadStatusByNode((previous) => ({ ...previous, [nodeId]: message }));
+    } finally {
+      setUploadingByNode((previous) => ({ ...previous, [nodeId]: false }));
+    }
   };
 
   const zoneNameById = useMemo(() => {
@@ -254,6 +438,14 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
     }
     return map;
   }, [zones]);
+
+  const personNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const person of knownPeople) {
+      map.set(person.id, person.name);
+    }
+    return map;
+  }, [knownPeople]);
 
   useEffect(() => {
     if (zones.length === 0) {
@@ -305,6 +497,24 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
           className="w-full bg-black border border-gray-700 rounded p-2 text-sm"
           placeholder="Example: Person in Zone1 with car in Zone2"
         />
+        <div className="flex items-center justify-between text-[11px] text-gray-400">
+          <span>
+            {peopleLoading
+              ? "Loading identities..."
+              : `Known identities: ${knownPeople.length}`}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              void loadPeople();
+            }}
+            className="px-2 py-1 rounded border border-gray-700 hover:border-blue-500 hover:text-blue-300"
+            disabled={peopleLoading}
+          >
+            Refresh
+          </button>
+        </div>
+        {peopleError ? <p className="text-[11px] text-red-300">{peopleError}</p> : null}
       </div>
 
       <div className="space-y-2">
@@ -403,6 +613,155 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
                       updateNode(node.id, "durationSeconds", Number(event.target.value))
                     }
                   />
+                </div>
+              ) : null}
+
+              {node.object === "PERSON" ? (
+                <div className="col-span-2 border border-gray-700 rounded p-2 bg-black/40 space-y-2">
+                  <label className="flex items-center gap-2 text-xs text-gray-200">
+                    <input
+                      type="checkbox"
+                      checked={node.personFilterEnabled}
+                      onChange={(event) =>
+                        updateNode(node.id, "personFilterEnabled", event.target.checked)
+                      }
+                    />
+                    Ignore whitelisted people for this condition
+                  </label>
+
+                  {node.personFilterEnabled ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[11px] text-gray-400">Selected identities</label>
+                          <p className="text-[11px] mt-1 text-gray-300">
+                            {node.personIds.length === 0
+                              ? "None selected"
+                              : node.personIds
+                                  .map((personId) => personNameById.get(personId) ?? personId)
+                                  .join(", ")}
+                          </p>
+                        </div>
+                        <div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <p className="text-[11px] text-gray-400">Choose people</p>
+                        {knownPeople.length === 0 ? (
+                          <p className="text-[11px] text-amber-300">
+                            No enrolled people yet. Create one and upload photos below.
+                          </p>
+                        ) : (
+                          <div className="max-h-28 overflow-y-auto pr-1 grid grid-cols-2 gap-1">
+                            {knownPeople.map((person) => (
+                              <label
+                                key={person.id}
+                                className="text-[11px] text-gray-300 flex items-center gap-1"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={node.personIds.includes(person.id)}
+                                  onChange={(event) =>
+                                    togglePersonForNode(node.id, person.id, event.target.checked)
+                                  }
+                                />
+                                {person.name}
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="border border-gray-700 rounded p-2 space-y-2">
+                        <p className="text-[11px] text-gray-300">Create person and attach photos</p>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="New person name"
+                            className="flex-1 bg-black border border-gray-700 rounded p-1.5 text-xs"
+                            value={newPersonNameByNode[node.id] ?? ""}
+                            onChange={(event) =>
+                              setNewPersonNameByNode((previous) => ({
+                                ...previous,
+                                [node.id]: event.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="px-2 py-1 text-xs rounded border border-blue-500/60 text-blue-300 disabled:opacity-50"
+                            onClick={() => {
+                              void handleCreatePerson(node.id);
+                            }}
+                            disabled={creatingPersonByNode[node.id]}
+                          >
+                            {creatingPersonByNode[node.id] ? "Creating..." : "Create"}
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-[1fr_auto] gap-2 items-center">
+                          <select
+                            className="bg-black border border-gray-700 rounded p-1.5 text-xs"
+                            value={uploadPersonIdByNode[node.id] ?? ""}
+                            onChange={(event) =>
+                              setUploadPersonIdByNode((previous) => ({
+                                ...previous,
+                                [node.id]: event.target.value,
+                              }))
+                            }
+                          >
+                            <option value="">Select person for photo upload</option>
+                            {knownPeople.map((person) => (
+                              <option key={person.id} value={person.id}>
+                                {person.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="px-2 py-1 text-xs rounded border border-green-500/60 text-green-300 disabled:opacity-50"
+                            onClick={() => {
+                              void handleUploadImages(node.id);
+                            }}
+                            disabled={uploadingByNode[node.id]}
+                          >
+                            {uploadingByNode[node.id] ? "Uploading..." : "Upload"}
+                          </button>
+                        </div>
+
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*"
+                          className="w-full text-[11px] text-gray-300"
+                          onChange={(event) => {
+                            const selectedFiles = Array.from(event.target.files || []);
+                            setUploadFilesByNode((previous) => ({
+                              ...previous,
+                              [node.id]: selectedFiles,
+                            }));
+                          }}
+                        />
+
+                        {(uploadFilesByNode[node.id] ?? []).length > 0 ? (
+                          <p className="text-[11px] text-gray-400">
+                            {(uploadFilesByNode[node.id] ?? []).length} image(s) selected.
+                          </p>
+                        ) : null}
+
+                        {uploadStatusByNode[node.id] ? (
+                          <p className="text-[11px] text-gray-300">{uploadStatusByNode[node.id]}</p>
+                        ) : null}
+
+                        {node.personIds.length === 0 ? (
+                          <p className="text-[11px] text-amber-300">
+                            Whitelist is empty, so this condition will trigger for every person.
+                          </p>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -507,7 +866,7 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
                   </button>
                 </div>
                 <p className="text-gray-400">
-                  {summarizeRuleNode(rule.when, zoneNameById)}
+                  {summarizeRuleNode(rule.when, zoneNameById, personNameById)}
                 </p>
                 <p className="text-gray-500">Actions: {rule.actions.join(", ")}</p>
               </div>
