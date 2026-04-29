@@ -1,7 +1,9 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Union, Literal
+import asyncio
 import json
 import os
 import threading
@@ -92,19 +94,25 @@ async def upload_video(file: UploadFile = File(...)):
 
 
 @app.get("/video_feed")
-def video_feed():
+async def video_feed(request: Request):
     target_fps = 15
     frame_interval = 1.0 / target_fps
     frames_sent = 0
     
     print("[video_feed] Stream connected, waiting for frames...")
 
-    def generate():
+    async def generate():
         nonlocal frames_sent
         startup_delay = 0  # Track time waiting for first frame
         while True:
+            if await request.is_disconnected():
+                print("[video_feed] Client disconnected")
+                break
+
             frame = None
             with runtime_lock:
+                if runtime is None:
+                    break
                 if runtime is not None:
                     with runtime.state_lock:
                         if runtime.latest_stream_frame is not None:
@@ -115,12 +123,12 @@ def video_feed():
                 if startup_delay > 5:  # Log every 5 seconds if no frames
                     print(f"[video_feed] Still waiting for frames... (elapsed: {startup_delay}s)")
                     startup_delay = 0
-                time.sleep(0.05)
+                await asyncio.sleep(0.05)
                 continue
 
             ok, buffer = cv2.imencode(".jpg", frame)
             if not ok:
-                time.sleep(0.01)
+                await asyncio.sleep(0.01)
                 continue
 
             jpg = buffer.tobytes()
@@ -132,12 +140,25 @@ def video_feed():
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
             )
-            time.sleep(frame_interval)
+            await asyncio.sleep(frame_interval)
 
     return StreamingResponse(
         generate(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    global runtime, worker_thread, stop_event
+    stop_event.set()
+    with runtime_lock:
+        if worker_thread is not None and worker_thread.is_alive():
+            worker_thread.join(timeout=2)
+            worker_thread = None
+        if runtime is not None:
+            close_runtime(runtime)
+            runtime = None
 
 
 @app.get("/event_log")
