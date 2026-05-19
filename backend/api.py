@@ -67,6 +67,40 @@ def _attach_face_to_runtime(rt):
         print(f"[face] Warning: face recognizer unavailable: {e}")
         rt.face_recognizer = None
 
+
+def _shutdown_runtime(reason: str = "shutdown"):
+    global runtime, worker_thread, stop_event
+
+    with runtime_lock:
+        current_runtime = runtime
+        current_worker = worker_thread
+        current_stop_event = stop_event
+
+    print(f"[{reason}] Cleanup requested")
+    if current_stop_event is not None:
+        current_stop_event.set()
+
+    if current_worker is not None and current_worker.is_alive():
+        print(f"[{reason}] Waiting for worker thread to stop...")
+        current_worker.join(timeout=5)
+
+    if current_runtime is not None:
+        print(f"[{reason}] Releasing runtime resources...")
+        close_runtime(current_runtime)
+
+    if current_worker is not None and current_worker.is_alive():
+        print(f"[{reason}] Worker thread is still alive after cleanup timeout")
+    else:
+        print(f"[{reason}] Worker thread stopped cleanly")
+
+    with runtime_lock:
+        if worker_thread is current_worker and (current_worker is None or not current_worker.is_alive()):
+            worker_thread = None
+        if runtime is current_runtime:
+            runtime = None
+
+    print(f"[{reason}] Cleanup complete")
+
 @app.get("/")
 def root():
     return {"message": "EagleEye backend running"}
@@ -150,15 +184,7 @@ async def video_feed(request: Request):
 
 @app.on_event("shutdown")
 def on_shutdown():
-    global runtime, worker_thread, stop_event
-    stop_event.set()
-    with runtime_lock:
-        if worker_thread is not None and worker_thread.is_alive():
-            worker_thread.join(timeout=2)
-            worker_thread = None
-        if runtime is not None:
-            close_runtime(runtime)
-            runtime = None
+    _shutdown_runtime("shutdown")
 
 
 @app.get("/event_log")
@@ -369,13 +395,10 @@ def stop():
                 runtime = None
             return {"status": "not running"}
 
-        stop_event.set()
-        worker_thread.join(timeout=2)
-        if runtime is not None:
-            append_runtime_log(runtime, "Monitoring stopped", category="system")
-        worker_thread = None
-        runtime = None
-        return {"status": "stopped"}
+    if runtime is not None:
+        append_runtime_log(runtime, "Monitoring stopped", category="system")
+    _shutdown_runtime("stop")
+    return {"status": "stopped"}
 
 
 @app.post("/clear_zones")
