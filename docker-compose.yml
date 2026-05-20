@@ -1,0 +1,26 @@
+version: "3.8"
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        BASE_IMAGE: python:3.11-slim
+    volumes:
+      - ./uploads:/app/uploads
+      - ./known_people:/app/known_people
+      - ./data:/app/data
+      - ./config:/app/config
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
