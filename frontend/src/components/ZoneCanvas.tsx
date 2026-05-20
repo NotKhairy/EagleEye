@@ -14,6 +14,8 @@ type ZoneCanvasProps = {
   liveStream: MediaStream | null;
   videoSource: VideoSource | null;
   onZonesChange?: (zones: Zone[]) => void;
+  initialZones?: Zone[];
+  editable?: boolean;
 };
 
 function toKonvaPoints(pts: Point[]): number[] {
@@ -21,10 +23,10 @@ function toKonvaPoints(pts: Point[]): number[] {
 }
 
 const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCanvas(
-  { liveStream, videoSource, onZonesChange },
+  { liveStream, videoSource, onZonesChange, initialZones = [], editable = true },
   ref
 ) {
-  const [zones, setZones] = useState<Zone[]>([]);
+  const [zones, setZones] = useState<Zone[]>(initialZones);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [isDeleteMode, setIsDeleteMode] = useState(false);
@@ -95,6 +97,38 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
   }, [zones.length, isDeleteMode]);
 
   useEffect(() => {
+    setZones(initialZones);
+    setSelectedZoneId(null);
+    setIsDrawing(false);
+    setIsDeleteMode(false);
+    setDraftPoints([]);
+    setHoverPoint(null);
+  }, [initialZones]);
+
+  // If loaded zones appear to be stored as absolute pixel coordinates (legacy
+  // backend format), convert them to normalized [0..1] coordinates when the
+  // media size becomes known so they render and scale correctly.
+  useEffect(() => {
+    if (mediaSize.width <= 0 || mediaSize.height <= 0) return;
+    if (!zones || zones.length === 0) return;
+
+    const needsConversion = zones.some((z) =>
+      (z.polygon || []).some((p) => typeof p.x === "number" && typeof p.y === "number" && (p.x > 1 || p.y > 1))
+    );
+    if (!needsConversion) return;
+
+    const normalized = zones.map((z) => ({
+      ...z,
+      polygon: (z.polygon || []).map((p) => ({
+        x: Math.max(0, Math.min(1, p.x / (mediaSize.width || 1))),
+        y: Math.max(0, Math.min(1, p.y / (mediaSize.height || 1))),
+      })),
+    }));
+
+    setZones(normalized);
+  }, [mediaSize.width, mediaSize.height]);
+
+  useEffect(() => {
     onZonesChange?.(zones);
   }, [onZonesChange, zones]);
 
@@ -146,7 +180,7 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
 
   const nearOrigin = hoverPoint ? isNearOrigin(hoverPoint) : false;
   const showUploadedVideo = videoSource?.type === "video_file" && Boolean(videoSource.filePath);
-  const allowOverlayInteraction = isDrawing || isDeleteMode || videoSource?.type === "camera";
+  const allowOverlayInteraction = editable && (isDrawing || isDeleteMode || videoSource?.type === "camera");
 
   const handleOverlayClick = (x: number, y: number) => {
     if (!isDrawing) return;
@@ -182,6 +216,7 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
   };
 
   const handleAddZone = () => {
+    if (!editable) return;
     setIsDrawing(true);
     setIsDeleteMode(false);
     setDraftPoints([]);
@@ -190,6 +225,7 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
   };
 
   const toggleDeleteMode = () => {
+    if (!editable) return;
     setIsDeleteMode((prev) => {
       const next = !prev;
       if (next) {
@@ -230,7 +266,7 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
           <button
             type="button"
             onClick={handleAddZone}
-            disabled={isDrawing || isDeleteMode}
+            disabled={!editable || isDrawing || isDeleteMode}
             className="bg-[#151B22] px-3 py-1 rounded disabled:opacity-40"
           >
             + Add Zone
@@ -238,7 +274,7 @@ const ZoneCanvas = forwardRef<ZoneCanvasHandle, ZoneCanvasProps>(function ZoneCa
           <button
             type="button"
             onClick={toggleDeleteMode}
-            disabled={isDrawing || zones.length === 0}
+            disabled={!editable || isDrawing || zones.length === 0}
             className={
               isDeleteMode
                 ? "bg-red-900/80 text-red-100 px-3 py-1 rounded"

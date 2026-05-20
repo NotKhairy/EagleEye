@@ -8,6 +8,10 @@ from datetime import datetime
 from detection.detector import ObjectDetector
 from detection.zone_logic import ZoneManager
 
+DATA_DIR = "data"
+EVENT_LOG_PATH = os.path.join(DATA_DIR, "event_log.json")
+SNAPSHOT_INDEX_PATH = os.path.join(DATA_DIR, "snapshots.json")
+
 # Process detection every Nth frame (1 = every frame, 2 = every other frame).
 
 def load_global_config():
@@ -30,8 +34,69 @@ def _zones_require_face_identity(zone_manager) -> bool:
     return False
 
 
-EVENT_LOG_HISTORY = []
+def _ensure_data_dir():
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def _read_json_list(path):
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _write_json_list(path, payload):
+    _ensure_data_dir()
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=4)
+
+
+def load_persisted_event_log_history(limit=None):
+    entries = _read_json_list(EVENT_LOG_PATH)
+    if limit is None or limit <= 0:
+        return entries
+    return entries[-limit:]
+
+
+def persist_event_log_history(entries):
+    _write_json_list(EVENT_LOG_PATH, entries)
+
+
+def clear_persisted_event_log_history():
+    with EVENT_LOG_LOCK:
+        EVENT_LOG_HISTORY.clear()
+        persist_event_log_history(EVENT_LOG_HISTORY)
+
+
+def load_snapshot_records(limit=None):
+    records = _read_json_list(SNAPSHOT_INDEX_PATH)
+    if limit is None or limit <= 0:
+        return records
+    return records[-limit:]
+
+
+def persist_snapshot_records(records):
+    _write_json_list(SNAPSHOT_INDEX_PATH, records)
+
+
+def append_snapshot_record(record):
+    with SNAPSHOT_INDEX_LOCK:
+        SNAPSHOT_RECORDS.append(record)
+        persist_snapshot_records(SNAPSHOT_RECORDS)
+
+
+def clear_snapshot_records():
+    with SNAPSHOT_INDEX_LOCK:
+        SNAPSHOT_RECORDS.clear()
+        persist_snapshot_records(SNAPSHOT_RECORDS)
+
+
+EVENT_LOG_HISTORY = load_persisted_event_log_history()
 EVENT_LOG_LOCK = threading.Lock()
+SNAPSHOT_RECORDS = load_snapshot_records()
+SNAPSHOT_INDEX_LOCK = threading.Lock()
 
 
 def append_runtime_log(runtime, message, level="info", category="system", data=None):
@@ -47,6 +112,7 @@ def append_runtime_log(runtime, message, level="info", category="system", data=N
         EVENT_LOG_HISTORY.append(entry)
         if len(EVENT_LOG_HISTORY) > 250:
             del EVENT_LOG_HISTORY[:-250]
+        persist_event_log_history(EVENT_LOG_HISTORY)
     return entry
 
 
@@ -56,6 +122,13 @@ def get_event_log_history(limit=200):
         if limit is None or limit <= 0:
             return list(EVENT_LOG_HISTORY)
         return list(EVENT_LOG_HISTORY[-limit:])
+
+
+def get_snapshot_history(limit=200):
+    with SNAPSHOT_INDEX_LOCK:
+        if limit is None or limit <= 0:
+            return list(SNAPSHOT_RECORDS)
+        return list(SNAPSHOT_RECORDS[-limit:])
 
 
 class EagleEyeRuntime:
@@ -102,6 +175,8 @@ class EagleEyeRuntime:
         if fps <= 0.0 or fps > 120.0:
             fps = 30.0
         self.source_fps = fps
+        self.source_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        self.source_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         self.frame_interval_seconds = 1.0 / fps
 
 
@@ -147,6 +222,25 @@ def _detector_worker_loop(runtime):
                 )
                 snapshot_path = save_snapshot(alert_frame, runtime.snapshot_dir)
                 if snapshot_path:
+                    object_summary = ", ".join(
+                        f"{obj.get('label', 'object')}#{obj.get('track_id', 'n/a')}"
+                        for obj in (trigger_events[0].get("matched_objects") or [])[:3]
+                    ) or "object"
+                    snapshot_record = {
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "snapshot_path": snapshot_path,
+                        "source": str(runtime.videoSource),
+                        "event_count": len(trigger_events),
+                        "rule_ids": sorted({event.get("rule_id") for event in trigger_events if event.get("rule_id")}),
+                        "rule_names": sorted({event.get("rule_name") for event in trigger_events if event.get("rule_name")}),
+                        "zone_ids": sorted({
+                            zone_id
+                            for event in trigger_events
+                            for zone_id in (event.get("zone_ids") or [])
+                        }),
+                        "object_summary": object_summary,
+                    }
+                    append_snapshot_record(snapshot_record)
                     runtime.detector.execute_trigger_events(trigger_events, snapshot_path)
                     for event in trigger_events:
                         matched_objects = event.get("matched_objects") or []
@@ -172,7 +266,9 @@ def _detector_worker_loop(runtime):
                 runtime.last_trigger_events = trigger_events
                 runtime.last_detection_frame_index = frame_index
         except Exception as e:
+            import traceback
             print(f"[ERROR] Detector worker failed: {e}")
+            traceback.print_exc()
             with runtime.state_lock:
                 runtime.last_detection_frame_index = frame_index
         finally:
@@ -308,6 +404,9 @@ def get_runtime_status(runtime):
         "detector_busy": runtime.detector_busy,
         "last_detection_frame_index": runtime.last_detection_frame_index,
         "show_window": runtime.show_window,
+        "source_width": runtime.source_width,
+        "source_height": runtime.source_height,
+        "source_fps": runtime.source_fps,
     }
 
 

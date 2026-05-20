@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { VideoSourceType, VideoSource, Zone, RuleConfig } from "../types/types";
 import type { GlobalConfig } from "../services/api";
 import RuleBuilderPanel, { type RuleBuilderPanelHandle } from "./RuleBuilderPanel";
@@ -12,11 +12,16 @@ type DetectionSettingsPanelProps = {
   videoSourceType: VideoSourceType | undefined;
   videoSource: VideoSource | null;
   zones: Zone[];
+  initialRules?: RuleConfig[];
   cameras: CameraOption[];
   selectedCameraId: string | null;
   uploadedVideoName: string | null;
   isLoadingCameras: boolean;
   sourceError: string | null;
+  initialFrameSkip?: number;
+  initialConfidenceThreshold?: number;
+  editable?: boolean;
+  submitLabel?: string;
   onActivateLiveFeed: () => void;
   onActivateUploadFile: () => void;
   onUploadVideoFile: (file: File) => void;
@@ -33,6 +38,11 @@ export default function DetectionSettingsPanel({
   uploadedVideoName,
   isLoadingCameras,
   sourceError,
+  initialRules = [],
+  initialFrameSkip = 2,
+  initialConfidenceThreshold = 0.5,
+  editable = true,
+  submitLabel = "START MONITORING",
   onActivateLiveFeed,
   onActivateUploadFile,
   onUploadVideoFile,
@@ -43,8 +53,16 @@ export default function DetectionSettingsPanel({
     cameras.find((camera) => camera.deviceId === selectedCameraId) ?? null;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const ruleBuilderRef = useRef<RuleBuilderPanelHandle | null>(null);
-  const [frameSkip, setFrameSkip] = useState(2);
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
+  const [frameSkip, setFrameSkip] = useState(initialFrameSkip);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(initialConfidenceThreshold);
+
+  useEffect(() => {
+    setFrameSkip(initialFrameSkip);
+  }, [initialFrameSkip]);
+
+  useEffect(() => {
+    setConfidenceThreshold(initialConfidenceThreshold);
+  }, [initialConfidenceThreshold]);
 
   const handleStartMonitoring = async () => {
     // Validate constraints
@@ -76,7 +94,7 @@ export default function DetectionSettingsPanel({
   };
 
   return (
-    <div className="w-85 h-full min-h-0 overflow-y-auto border-r border-gray-800 px-4 py-3 flex flex-col gap-3">
+    <div className={`w-85 h-full min-h-0 shrink-0 overflow-y-auto overscroll-contain border-r border-gray-800 px-4 py-3 flex flex-col gap-3 ${editable ? "" : "pointer-events-none opacity-60"}`}>
       <div>
         <h2 className="text-base font-semibold">System Configuration</h2>
         <p className="text-xs text-gray-400 leading-4">
@@ -216,14 +234,15 @@ export default function DetectionSettingsPanel({
         </div>
       </div>
 
-      <RuleBuilderPanel ref={ruleBuilderRef} zones={zones} />
+      <RuleBuilderPanel ref={ruleBuilderRef} zones={zones} initialRules={initialRules} editable={editable} />
 
 
       <button
         onClick={handleStartMonitoring}
         className="mt-auto bg-blue-600 hover:bg-blue-700 py-2 rounded text-sm font-semibold shrink-0"
+        disabled={!editable}
       >
-        START MONITORING
+        {submitLabel}
       </button>
 
       <p className="text-[11px] leading-4 text-center text-gray-500">

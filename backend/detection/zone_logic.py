@@ -154,7 +154,15 @@ class ZoneManager:
         polygon = []
         for p in coordinates:
             if isinstance(p, (list, tuple)) and len(p) == 2:
-                polygon.append((int(p[0]), int(p[1])))
+                x = p[0]
+                y = p[1]
+                if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                    continue
+                if not math.isfinite(float(x)) or not math.isfinite(float(y)):
+                    continue
+                x_int = max(-(2 ** 31), min(2 ** 31 - 1, int(round(float(x)))))
+                y_int = max(-(2 ** 31), min(2 ** 31 - 1, int(round(float(y)))))
+                polygon.append((x_int, y_int))
 
         return polygon
 
@@ -164,7 +172,21 @@ class ZoneManager:
 
     def _polygon_to_contour(self, polygon):
         """Convert polygon points to OpenCV contour format."""
-        return np.array(polygon, dtype=np.int32)
+        safe_polygon = []
+        for point in polygon:
+            if isinstance(point, (list, tuple)) and len(point) == 2:
+                x, y = point
+                if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                    continue
+                if not math.isfinite(float(x)) or not math.isfinite(float(y)):
+                    continue
+                safe_polygon.append(
+                    (
+                        max(-(2 ** 31), min(2 ** 31 - 1, int(round(float(x))))) ,
+                        max(-(2 ** 31), min(2 ** 31 - 1, int(round(float(y))))) ,
+                    )
+                )
+        return np.array(safe_polygon, dtype=np.int32)
 
     def _is_close_to_first_point(self, point):
         """Check if a clicked point is near the first point of active polygon."""

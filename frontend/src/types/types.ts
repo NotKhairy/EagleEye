@@ -6,12 +6,55 @@
 
 export type VideoSourceType = "camera" | "video_file";
 
+export interface VideoSourceMetadata {
+  source_width: number | null;
+  source_height: number | null;
+  source_fps: number | null;
+}
+
 export interface VideoSource {
   type: VideoSourceType;
   deviceId?: string;
   filePath?: string;  // Backend file path for API calls
   previewUrl?: string;  // Blob URL for browser preview
   name?: string;
+}
+
+export interface VideoSourceConfig {
+  video_source: string | null;
+}
+
+export interface BootStatus {
+  ready: boolean;
+  missing_or_empty: string[];
+}
+
+export interface MonitoringStatus {
+  state: "running" | "paused";
+  active: boolean;
+  runtime: SystemMetrics | null;
+}
+
+export interface PersistedRulePayload {
+  rule_id: string;
+  name: string;
+  description?: string;
+  conditions: {
+    when: RuleNode;
+    actions: RuleAction[];
+  };
+  severity: string;
+}
+
+export interface SnapshotRecord {
+  timestamp: string;
+  snapshot_path: string;
+  source: string;
+  event_count: number;
+  rule_ids: string[];
+  rule_names: string[];
+  zone_ids: string[];
+  object_summary: string;
 }
 
 
@@ -167,4 +210,7 @@ export interface SystemMetrics {
   fps: number;
   trackedObjects: number;
   activeAlerts: number;
+  source_width?: number;
+  source_height?: number;
+  source_fps?: number;
 }

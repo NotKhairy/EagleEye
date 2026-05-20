@@ -1,6 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import type {
-  PersonIdentityMode,
   PersonIdentityRule,
   RuleConfig,
   RuleNode,
@@ -20,6 +19,8 @@ import {
 
 type RuleBuilderPanelProps = {
   zones: Zone[];
+  initialRules?: RuleConfig[];
+  editable?: boolean;
 };
 
 export type RuleBuilderPanelHandle = {
@@ -53,6 +54,10 @@ const defaultNode = (): DraftNode => ({
 const objectOptions: RuleObject[] = COCO_CLASS_NAMES.map((label) =>
   label.replace(/\s+/g, "_").toUpperCase(),
 );
+
+function formatRuleObjectLabel(object: string): string {
+  return object.trim() ? object : "Anything";
+}
 
 const eventOptions: ZoneEvent[] = ["enter", "exit", "in_zone", "loitering"];
 
@@ -130,6 +135,7 @@ function summarizePredicate(
   personNameById: Map<string, string>,
 ): string {
   const notPart = node.not ? "NOT " : "";
+  const objectLabel = formatRuleObjectLabel(node.object);
   const zoneName = zoneNameById.get(node.zoneId) ?? node.zoneId;
   const personIdentity = node.personIdentity;
   const personFilterSummary = personIdentity && personIdentity.personIds.length > 0
@@ -139,14 +145,14 @@ function summarizePredicate(
     : "";
 
   if (node.type === "loitering") {
-    return `${notPart}${node.object} LOITERING IN ${zoneName} FOR ${node.durationSeconds}s${personFilterSummary}`;
+    return `${notPart}${objectLabel} LOITERING IN ${zoneName} FOR ${node.durationSeconds}s${personFilterSummary}`;
   }
 
   if (node.type === "in_zone") {
-    return `${notPart}${node.object} IN ${zoneName}${personFilterSummary}`;
+    return `${notPart}${objectLabel} IN ${zoneName}${personFilterSummary}`;
   }
 
-  return `${notPart}${node.object} ${node.type.toUpperCase()} ${zoneName}${personFilterSummary}`;
+  return `${notPart}${objectLabel} ${node.type.toUpperCase()} ${zoneName}${personFilterSummary}`;
 }
 
 function summarizeRuleNode(
@@ -167,10 +173,10 @@ function summarizeRuleNode(
 }
 
 const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProps>(function RuleBuilderPanel(
-  { zones },
+  { zones, initialRules = [], editable = true },
   ref,
 ) {
-  const [rules, setRules] = useState<RuleConfig[]>([]);
+  const [rules, setRules] = useState<RuleConfig[]>(initialRules);
   const [ruleName, setRuleName] = useState("");
   const [nodes, setNodes] = useState<DraftNode[]>([defaultNode()]);
   const [connectors, setConnectors] = useState<Connector[]>([]);
@@ -464,6 +470,12 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
     );
   }, [zones]);
 
+  useEffect(() => {
+    setRules(initialRules);
+  }, [initialRules]);
+
+  const isEditable = editable;
+
   const deleteRule = (ruleId: string) => {
     setRules((previous) => previous.filter((rule) => rule.id !== ruleId));
   };
@@ -473,7 +485,7 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
   }), [rules]);
 
   return (
-    <div className="bg-[#11161D] p-3 rounded-lg space-y-3">
+    <div className={`bg-[#11161D] p-3 rounded-lg space-y-3 ${isEditable ? "" : "pointer-events-none opacity-60"}`}>
       <div className="flex items-start justify-between gap-2">
         <div>
           <h3 className="font-semibold text-sm">Rule Builder</h3>
@@ -509,7 +521,7 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
               void loadPeople();
             }}
             className="px-2 py-1 rounded border border-gray-700 hover:border-blue-500 hover:text-blue-300"
-            disabled={peopleLoading}
+                    disabled={peopleLoading || !isEditable}
           >
             Refresh
           </button>
@@ -552,11 +564,12 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
                 <label className="text-[11px] text-gray-400">Object</label>
                 <select
                   className="w-full mt-1 bg-black border border-gray-700 rounded p-1.5 text-xs"
-                  value={node.object}
+                  value={node.object || ""}
                   onChange={(event) =>
                     updateNode(node.id, "object", event.target.value as RuleObject)
                   }
                 >
+                  <option value="">Anything</option>
                   {objectOptions.map((option) => (
                     <option key={option} value={option}>
                       {option}
@@ -769,7 +782,7 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
                 <button
                   type="button"
                   onClick={() => removeNode(node.id)}
-                  disabled={nodes.length === 1}
+                  disabled={!isEditable || nodes.length === 1}
                   className="text-xs px-2 py-1 rounded border border-red-500/50 text-red-300 disabled:opacity-40"
                 >
                   Remove Node
@@ -783,6 +796,7 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
           type="button"
           onClick={addNode}
           className="w-full text-xs border border-dashed border-gray-600 rounded py-2 hover:border-blue-500 hover:text-blue-300"
+          disabled={!isEditable}
         >
           + Add Node
         </button>
@@ -824,7 +838,7 @@ const RuleBuilderPanel = forwardRef<RuleBuilderPanelHandle, RuleBuilderPanelProp
         <button
           type="button"
           onClick={createRule}
-          disabled={!canCreateRule}
+          disabled={!isEditable || !canCreateRule}
           className="px-3 py-2 rounded text-xs font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
         >
           Create Rule

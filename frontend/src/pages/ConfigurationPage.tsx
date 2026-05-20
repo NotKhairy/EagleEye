@@ -3,7 +3,7 @@ import DetectionSettingsPanel from "../components/DetectionSettingsPanel";
 import ZoneCanvas, { type ZoneCanvasHandle } from "../components/ZoneCanvas";
 import FooterStatusBar from "../components/FooterStatusBar";
 import type { RuleConfig, VideoSource, VideoSourceType, Zone } from "../types/types";
-import { clearRules, clearZones, saveRules, saveZone, setGlobalConfig, startMonitoring, uploadVideoFile, type GlobalConfig } from "../services/api";
+import { clearRules, clearZones, getGlobalConfig, getMonitoringStatus, getRules, getVideoSourceConfig, getVideoSourceMetadata, listZones, saveRules, saveZone, setGlobalConfig, setVideoSourceConfig, startMonitoring, uploadVideoFile, type GlobalConfig } from "../services/api";
 
 type CameraOption = {
   deviceId: string;
@@ -12,10 +12,15 @@ type CameraOption = {
 
 type ConfigurationPageProps = {
   onMonitoringStarted: () => void;
+  mode?: "setup" | "settings";
 };
 
-export default function ConfigurationPage({ onMonitoringStarted }: ConfigurationPageProps) {
-  const [videoSourceType, setVideoSourceType] = useState<VideoSourceType>();
+export default function ConfigurationPage({
+  onMonitoringStarted,
+  mode = "setup",
+}: ConfigurationPageProps) {
+  const isSettingsMode = mode === "settings";
+  const [videoSourceType, setVideoSourceType] = useState<VideoSourceType | undefined>();
   const [cameras, setCameras] = useState<CameraOption[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
   const [videoSource, setVideoSource] = useState<VideoSource | null>(null);
@@ -29,6 +34,11 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
   const [mediaFPS, setMediaFPS] = useState<string>("N/A");
   const [uploadedVideoName, setUploadedVideoName] = useState<string | null>(null);
   const [zones, setZones] = useState<Zone[]>([]);
+  const [persistedZones, setPersistedZones] = useState<Zone[]>([]);
+  const [loadedRules, setLoadedRules] = useState<RuleConfig[]>([]);
+  const [initialFrameSkip, setInitialFrameSkip] = useState(2);
+  const [initialConfidenceThreshold, setInitialConfidenceThreshold] = useState(0.5);
+  const [isMonitoringActive, setIsMonitoringActive] = useState(false);
 
   const revokeUploadedVideoUrl = () => {
     if (uploadedVideoUrlRef.current) {
@@ -60,6 +70,89 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     setMediaFPS(typeof frameRate === "number" ? frameRate.toFixed(1) : "N/A");
   };
 
+  useEffect(() => {
+    if (!isSettingsMode) {
+      return;
+    }
+
+    let active = true;
+
+    const loadPersistedState = async () => {
+      try {
+        const [savedZones, savedRules, savedConfig, savedVideoSource, monitoringStatus] = await Promise.all([
+          listZones(),
+          getRules(),
+          getGlobalConfig(),
+          getVideoSourceConfig(),
+          getMonitoringStatus(),
+        ]);
+
+        if (!active) {
+          return;
+        }
+
+        setPersistedZones(savedZones);
+        setZones(savedZones);
+        setLoadedRules(savedRules);
+        setInitialFrameSkip(savedConfig.frameSkip);
+        setInitialConfidenceThreshold(savedConfig.confidenceThreshold);
+        setIsMonitoringActive(monitoringStatus.active);
+
+        if (monitoringStatus.active && monitoringStatus.runtime) {
+          const runtime = monitoringStatus.runtime;
+          setMediaResolution(
+            runtime.source_width && runtime.source_height
+              ? `${runtime.source_width} x ${runtime.source_height}`
+              : "N/A",
+          );
+          setMediaFPS(typeof runtime.source_fps === "number" ? runtime.source_fps.toFixed(1) : "N/A");
+        }
+
+        const persistedSource = savedVideoSource.video_source;
+        if (persistedSource) {
+          if (persistedSource === "0") {
+            setVideoSourceType("camera");
+            setSelectedCameraId("0");
+            setVideoSource({ type: "camera", deviceId: "0", name: "Default webcam" });
+            if (!monitoringStatus.active) {
+              setMediaResolution("N/A");
+              setMediaFPS("N/A");
+            }
+          } else {
+            const previewPath = `/api/uploads/${encodeURIComponent(persistedSource.split(/[\\/]/).pop() ?? persistedSource)}`;
+            setVideoSourceType("video_file");
+            setUploadedVideoName(persistedSource.split(/[\\/]/).pop() ?? persistedSource);
+            setVideoSource({
+              type: "video_file",
+              filePath: persistedSource,
+              previewUrl: previewPath,
+              name: persistedSource.split(/[\\/]/).pop() ?? persistedSource,
+            });
+            try {
+              const metadata = await getVideoSourceMetadata(persistedSource);
+              setMediaResolution(
+                metadata.source_width && metadata.source_height
+                  ? `${metadata.source_width} x ${metadata.source_height}`
+                  : "N/A",
+              );
+              setMediaFPS(typeof metadata.source_fps === "number" ? metadata.source_fps.toFixed(1) : "N/A");
+            } catch (metadataError) {
+              console.error("[CONFIG] Failed to load persisted video metadata:", metadataError);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("[CONFIG] Failed to load persisted settings:", error);
+      }
+    };
+
+    void loadPersistedState();
+
+    return () => {
+      active = false;
+    };
+  }, [isSettingsMode]);
+
   const replaceStream = (nextStream: MediaStream | null) => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
@@ -69,6 +162,8 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
     setLiveStream(nextStream);
     updateMediaStatsFromStream(nextStream);
   };
+
+  const editable = isSettingsMode ? !isMonitoringActive : true;
 
   const handleActivateLiveFeed = async () => {
     revokeUploadedVideoUrl();
@@ -174,6 +269,14 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
         previewUrl: objectUrl,  // Blob URL for browser preview
         name: file.name,
       });
+
+      const metadata = await getVideoSourceMetadata(backendFilePath);
+      setMediaResolution(
+        metadata.source_width && metadata.source_height
+          ? `${metadata.source_width} x ${metadata.source_height}`
+          : "N/A",
+      );
+      setMediaFPS(typeof metadata.source_fps === "number" ? metadata.source_fps.toFixed(1) : "N/A");
     } catch (err) {
       console.error("[CONFIG] Failed to upload video file:", err);
       setSourceError(`Failed to upload video file: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -185,93 +288,8 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
       return;
     }
 
-    // Metadata-based resolution for uploaded files; FPS is not reliably available from file metadata.
-    const probe = document.createElement("video");
-    probe.preload = "metadata";
-    probe.crossOrigin = "anonymous";
-    
-    let metadataLoaded = false;
-    let metadataTimeout: number | null = null;
-    let dimensionCheckTimeout: number | null = null;
-    
-    const cleanup = () => {
-      if (metadataTimeout) clearTimeout(metadataTimeout);
-      if (dimensionCheckTimeout) clearTimeout(dimensionCheckTimeout);
-      probe.src = "";
-      probe.onloadedmetadata = null;
-      probe.onloadeddata = null;
-      probe.oncanplay = null;
-      probe.onerror = null;
-    };
-    
-    const checkDimensions = () => {
-      console.log(`[CONFIG] Checking dimensions: ${probe.videoWidth}x${probe.videoHeight}`);
-      
-      if (probe.videoWidth > 0 && probe.videoHeight > 0) {
-        console.log(`[CONFIG] ✓ Video dimensions detected: ${probe.videoWidth}x${probe.videoHeight}`);
-        if (metadataLoaded) return; // Already processed
-        metadataLoaded = true;
-        cleanup();
-        
-        setSourceError(null);
-        setMediaResolution(`${probe.videoWidth} x ${probe.videoHeight}`);
-        setMediaFPS("N/A");
-      }
-    };
-    
-    probe.onerror = (event) => {
-      console.error("[CONFIG] Video probe error:", event);
-      if (metadataLoaded) return;
-      metadataLoaded = true;
-      cleanup();
-      
-      const errorMsg = `Browser cannot play this video format. Supported: H.264 (MP4), VP8/VP9 (WebM). Try: ffmpeg -i "${file.name}" -c:v libx264 -preset fast output.mp4`;
-      console.error("[CONFIG]", errorMsg);
-      setSourceError(errorMsg);
-      setVideoSource(null);
-      setMediaResolution("N/A");
-      setMediaFPS("N/A");
-      revokeUploadedVideoUrl();
-    };
-    
-    // Try to get dimensions from loadedmetadata
-    probe.onloadedmetadata = () => {
-      console.log("[CONFIG] loadedmetadata event fired");
-      // Check immediately, but also schedule a check in case dimensions aren't ready yet
-      checkDimensions();
-      if (!metadataLoaded && probe.videoWidth === 0) {
-        dimensionCheckTimeout = setTimeout(checkDimensions, 100);
-      }
-    };
-    
-    // Also try loadeddata and canplay events - more reliable for dimensions
-    probe.onloadeddata = () => {
-      console.log("[CONFIG] loadeddata event fired");
-      checkDimensions();
-    };
-    
-    probe.oncanplay = () => {
-      console.log("[CONFIG] canplay event fired");
-      checkDimensions();
-    };
-    
-    // Timeout: if metadata doesn't load in 5 seconds, assume error
-    metadataTimeout = setTimeout(() => {
-      if (!metadataLoaded) {
-        metadataLoaded = true;
-        cleanup();
-        console.error("[CONFIG] Video metadata loading timeout (5s) - dimensions never loaded");
-        setSourceError("Video file took too long to load or has invalid metadata. Try converting: ffmpeg -i \"" + file.name + "\" -c:v libx264 -preset fast output.mp4");
-        setVideoSource(null);
-        setMediaResolution("N/A");
-        setMediaFPS("N/A");
-        revokeUploadedVideoUrl();
-      }
-    }, 5000);
-    
-    console.log("[CONFIG] Probing video with URL:", objectUrl?.substring(0, 50) + "...");
-    probe.src = objectUrl;
   };
+
 
   const handleSelectCamera = (deviceId: string) => {
     setSelectedCameraId(deviceId || null);
@@ -316,6 +334,21 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
       await setGlobalConfig(globalConfig);
       console.log("[CONFIG] Global config saved");
 
+      // Determine the video source string to send to backend and persist
+      const videoSourceStringLocal: string =
+        videoSourceData.type === "camera"
+          ? "0"
+          : (videoSourceData.filePath || videoSourceData.name || "video.mp4");
+
+      if (videoSourceData.type === "camera") {
+        console.log(`[CONFIG] Selected: "${videoSourceData.name}" - opening default camera (index 0)`);
+      } else {
+        console.log(`[CONFIG] Sending video file: ${videoSourceStringLocal}`);
+      }
+
+      await setVideoSourceConfig(videoSourceStringLocal);
+      console.log("[CONFIG] Video source config saved");
+
       await saveRules(rules);
       console.log(`[CONFIG] Total rules saved: ${rules.length}`);
 
@@ -324,20 +357,8 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
       console.log("[CONFIG] Releasing camera stream from browser...");
       replaceStream(null);
 
-      // Determine the video source string to send to backend
-      let videoSourceString: string;
-      if (videoSourceData.type === "camera") {
-        // Always use camera index 0 (default webcam)
-        videoSourceString = "0";
-        console.log(`[CONFIG] Selected: "${videoSourceData.name}" - opening default camera (index 0)`);
-      } else {
-        // For video file, use the file path or name
-        videoSourceString = videoSourceData.filePath || videoSourceData.name || "video.mp4";
-        console.log(`[CONFIG] Sending video file: ${videoSourceString}`);
-      }
-
-      // Start monitoring with the video source
-      await startMonitoring(videoSourceString);
+      // Start monitoring with the video source (previously determined)
+      await startMonitoring(videoSourceStringLocal);
     } catch (err) {
       console.error("Failed to start monitoring:", err);
       alert(`Error starting monitoring: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -407,16 +428,21 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
         : "waiting";
 
   return (
-    <div className="flex flex-1 overflow-hidden bg-[#0B0F14] text-white">
+    <div className="relative flex h-full min-h-0 overflow-hidden bg-[#0B0F14] text-white">
       <DetectionSettingsPanel
         videoSourceType={videoSourceType}
         videoSource={videoSource}
         zones={zones}
+        initialRules={loadedRules}
         cameras={cameras}
         selectedCameraId={selectedCameraId}
         uploadedVideoName={uploadedVideoName}
         isLoadingCameras={isLoadingCameras}
         sourceError={sourceError}
+        initialFrameSkip={initialFrameSkip}
+        initialConfidenceThreshold={initialConfidenceThreshold}
+        editable={editable}
+        submitLabel={isSettingsMode ? "RESUME MONITORING" : "START MONITORING"}
         onActivateLiveFeed={handleActivateLiveFeed}
         onActivateUploadFile={handleActivateUploadFile}
         onUploadVideoFile={handleUploadVideoFile}
@@ -429,6 +455,8 @@ export default function ConfigurationPage({ onMonitoringStarted }: Configuration
           liveStream={liveStream}
           videoSource={videoSource}
           onZonesChange={setZones}
+          initialZones={persistedZones}
+          editable={editable}
         />
         <FooterStatusBar
           streamResolution={mediaResolution}

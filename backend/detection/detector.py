@@ -10,6 +10,10 @@ import plyer
 import numpy as np
 
 
+_INT32_MIN = -(2 ** 31)
+_INT32_MAX = 2 ** 31 - 1
+
+
 def _bgr_face_crop_from_person_bbox(frame, x1, y1, x2, y2):
     """
     YOLO person boxes are full-body; faces are usually in the upper band.
@@ -69,6 +73,41 @@ class ObjectDetector:
         """Clear all zone-object state tracking to reset on video restart."""
         self.zone_runtime_state.clear()
         print("[INFO] Zone-object states cleared")
+
+    def _sanitize_number(self, value):
+        try:
+            number = float(value)
+        except Exception:
+            return None
+        if not math.isfinite(number):
+            return None
+        return number
+
+    def _sanitize_bbox_for_frame(self, bbox, frame_shape):
+        if frame_shape is None or len(frame_shape) < 2:
+            return None
+
+        height, width = frame_shape[:2]
+        if height <= 0 or width <= 0:
+            return None
+
+        values = []
+        for value in bbox:
+            sanitized = self._sanitize_number(value)
+            if sanitized is None:
+                return None
+            values.append(sanitized)
+
+        x1, y1, x2, y2 = values
+        x1 = max(0.0, min(x1, float(width - 1)))
+        y1 = max(0.0, min(y1, float(height - 1)))
+        x2 = max(0.0, min(x2, float(width - 1)))
+        y2 = max(0.0, min(y2, float(height - 1)))
+
+        if x2 <= x1 or y2 <= y1:
+            return None
+
+        return int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))
 
     def _point_to_segment_distance(self, point, seg_start, seg_end):
         """Compute shortest Euclidean distance from point to a segment."""
@@ -390,12 +429,26 @@ class ObjectDetector:
 
         deepsort_detections = []
         if len(yolo_result.boxes) > 0:
+            frame_height, frame_width = frame.shape[:2]
             for i, box in enumerate(yolo_result.boxes.xyxy):
-                x1, y1, x2, y2 = box.tolist()
+                x1, y1, x2, y2 = (self._sanitize_number(value) for value in box.tolist())
+                if None in (x1, y1, x2, y2):
+                    continue
+
+                x1 = max(0.0, min(x1, float(frame_width - 1)))
+                y1 = max(0.0, min(y1, float(frame_height - 1)))
+                x2 = max(0.0, min(x2, float(frame_width - 1)))
+                y2 = max(0.0, min(y2, float(frame_height - 1)))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+
                 w = x2 - x1
                 h = y2 - y1
-                conf = float(yolo_result.boxes.conf[i])
-                class_id = int(yolo_result.boxes.cls[i])
+                conf = self._sanitize_number(yolo_result.boxes.conf[i])
+                class_id = self._sanitize_number(yolo_result.boxes.cls[i])
+                if conf is None or class_id is None:
+                    continue
+                class_id = int(round(class_id))
                 label = str(self.model.names.get(class_id, str(class_id))).lower()
 
                 # DeepSORT expects: ([left, top, width, height], confidence, class_name)
@@ -409,14 +462,26 @@ class ObjectDetector:
                 continue
 
             ltrb = track.to_ltrb()
-            x1, y1, x2, y2 = map(int, ltrb)
+            bbox = self._sanitize_bbox_for_frame(ltrb, frame.shape)
+            if bbox is None:
+                continue
+
+            x1, y1, x2, y2 = bbox
             label = "object"
             if track.det_class is not None:
                 label = str(track.det_class).lower()
 
+            track_id = self._sanitize_number(track.track_id)
+            if track_id is None:
+                continue
+
+            track_id = int(round(track_id))
+            if track_id < 0 or track_id > _INT32_MAX:
+                continue
+
             tracked_objects.append(
                 {
-                    "track_id": int(track.track_id),
+                    "track_id": track_id,
                     "label": label,
                     "bbox": (x1, y1, x2, y2),
                     "center": self.get_box_center((x1, y1, x2, y2)),
@@ -498,8 +563,15 @@ class ObjectDetector:
     def draw_tracks(self, frame, tracked_objects, font_scale=0.4, line_width=1):
         """Draw tracked objects (bbox + label + track id + confidence)."""
         annotated = frame.copy()
+        height, width = annotated.shape[:2]
         for obj in tracked_objects:
             x1, y1, x2, y2 = obj["bbox"]
+            x1 = max(0, min(int(x1), width - 1))
+            y1 = max(0, min(int(y1), height - 1))
+            x2 = max(0, min(int(x2), width - 1))
+            y2 = max(0, min(int(y2), height - 1))
+            if x2 <= x1 or y2 <= y1:
+                continue
             label_text = f"{obj['label']} {obj['track_id']} {obj['confidence']:.2f}"
 
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), line_width)
@@ -519,6 +591,7 @@ class ObjectDetector:
     def draw_alert_snapshot(self, frame, tracked_objects, zone_manager, highlighted_zone_ids=None, font_scale=0.45, line_width=2):
         """Draw an alert snapshot with tracked objects and highlighted zones only."""
         annotated = frame.copy()
+        height, width = annotated.shape[:2]
         highlighted = {str(zone_id) for zone_id in (highlighted_zone_ids or [])}
 
         for zone in zone_manager.zones:
@@ -527,7 +600,18 @@ class ObjectDetector:
                 continue
 
             polygon = [tuple(point) for point in coordinates]
-            contour = np.array(polygon, dtype=np.int32)
+            contour = np.array([
+                (
+                    max(_INT32_MIN, min(_INT32_MAX, int(round(point[0])))),
+                    max(_INT32_MIN, min(_INT32_MAX, int(round(point[1])))),
+                )
+                for point in polygon
+                if len(point) == 2
+                and self._sanitize_number(point[0]) is not None
+                and self._sanitize_number(point[1]) is not None
+            ], dtype=np.int32)
+            if contour.size == 0:
+                continue
             is_highlighted = str(zone.get("id")) in highlighted
             color = (0, 215, 255) if is_highlighted else (120, 120, 120)
             thickness = line_width + 1 if is_highlighted else 1
@@ -548,6 +632,12 @@ class ObjectDetector:
 
         for obj in tracked_objects:
             x1, y1, x2, y2 = obj["bbox"]
+            x1 = max(0, min(int(x1), width - 1))
+            y1 = max(0, min(int(y1), height - 1))
+            x2 = max(0, min(int(x2), width - 1))
+            y2 = max(0, min(int(y2), height - 1))
+            if x2 <= x1 or y2 <= y1:
+                continue
             label_text = f"{obj['label']} {obj['track_id']} {obj['confidence']:.2f}"
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), line_width)
             text_origin = (x1, max(18, y1 - 8))

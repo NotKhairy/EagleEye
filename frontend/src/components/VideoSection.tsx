@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import type { Zone } from "../types/types";
 
 type VideoPlayerProps = {
@@ -20,6 +20,23 @@ export default function VideoSection({ streamSrc, directVideoSrc = null, zones =
             });
     }, [zones]);
 
+    useEffect(() => {
+        if (!directVideoSrc) return;
+
+        const handler = () => {
+            const el = document.querySelector('video[src="' + directVideoSrc + '"]') as HTMLVideoElement | null;
+            if (el) {
+                void el.play().catch(() => {});
+            }
+        };
+
+        document.addEventListener('visibilitychange', handler);
+
+        return () => {
+            document.removeEventListener('visibilitychange', handler);
+        };
+    }, [directVideoSrc]);
+
     return (
         <div className="h-full w-full p-4 flex flex-col">
             <div className="h-full w-full overflow-hidden rounded-lg border border-gray-800 bg-black relative">
@@ -27,20 +44,34 @@ export default function VideoSection({ streamSrc, directVideoSrc = null, zones =
                     <video
                         src={directVideoSrc}
                         className="h-full w-full object-contain"
-                        controls
                         autoPlay
                         muted
                         playsInline
+                        preload="auto"
+                        controls={false}
                         onLoadedMetadata={(event) => {
                             const video = event.currentTarget;
+                            try {
+                                video.currentTime = 0;
+                            } catch {}
+                            // ensure playback starts (some browsers require an explicit play call)
+                            void video.play().catch(() => {});
                             if (video.videoWidth > 0 && video.videoHeight > 0) {
                                 setFrameSize({ width: video.videoWidth, height: video.videoHeight });
                             }
                             console.log("✓ Direct video connected");
                         }}
+                        onCanPlay={() => {
+                            // try to continue playback if it was paused by visibility change
+                            const el = document.querySelector('video[src="' + directVideoSrc + '"]') as HTMLVideoElement | null;
+                            if (el) {
+                                void el.play().catch(() => {});
+                            }
+                        }}
                         onError={() => {
                             console.error("✗ Failed to load direct video from:", directVideoSrc);
                         }}
+                        disablePictureInPicture
                     />
                 ) : (
                     <img

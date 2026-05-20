@@ -6,6 +6,7 @@ from typing import List, Optional, Union, Literal
 import asyncio
 import json
 import os
+import subprocess
 import threading
 import time
 import mimetypes
@@ -17,18 +18,42 @@ from main import (
     append_runtime_log,
     close_runtime,
     get_event_log_history,
+    get_snapshot_history,
     get_runtime_status,
+    clear_persisted_event_log_history,
+    clear_snapshot_records,
     run_loop_in_thread,
 )
 
 app = FastAPI()
 
 DEFAULT_GLOBAL_CONFIG = "config/global_config.json"
+DEFAULT_VIDEO_SOURCE_CONFIG = "config/video_source.json"
 
 runtime = None
 worker_thread = None
 stop_event = threading.Event()
 runtime_lock = threading.Lock()
+
+UPLOADS_DIR = "uploads"
+NORMALIZED_VIDEO_SIZE = (1280, 720)
+NORMALIZED_VIDEO_FPS = 30.0
+SUPPORTED_VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".mkv",
+    ".webm",
+    ".avi",
+}
+
+
+CONFIG_FILES = {
+    "global": "config/global_config.json",
+    "zones": "config/zone_config.json",
+    "rules": "config/rules_config.json",
+    "video_source": DEFAULT_VIDEO_SOURCE_CONFIG,
+}
 
 # Face recognition globals (lazy init)
 _known_people_store = None
@@ -101,30 +126,252 @@ def _shutdown_runtime(reason: str = "shutdown"):
 
     print(f"[{reason}] Cleanup complete")
 
+
+def _monitoring_is_active() -> bool:
+    with runtime_lock:
+        return worker_thread is not None and worker_thread.is_alive()
+
+
+def _read_json_file(path: str):
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def _config_is_ready(path: str) -> bool:
+    data = _read_json_file(path)
+    if data is None:
+        return False
+    if isinstance(data, list):
+        return len(data) > 0
+    if isinstance(data, dict):
+        return len(data) > 0
+    return True
+
+
+def _boot_ready_state():
+    missing = [name for name, path in CONFIG_FILES.items() if not _config_is_ready(path)]
+    return {
+        "ready": len(missing) == 0,
+        "missing_or_empty": missing,
+    }
+
+
+def _require_monitoring_paused():
+    if _monitoring_is_active():
+        raise HTTPException(status_code=409, detail="Stop monitoring before editing configuration")
+
+
+def _clear_directory(path: str):
+    if not os.path.exists(path):
+        return
+    for entry in os.listdir(path):
+        entry_path = os.path.join(path, entry)
+        if os.path.isdir(entry_path):
+            shutil.rmtree(entry_path)
+        else:
+            os.remove(entry_path)
+
+
+def _write_json_list(path: str, payload: list):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=4)
+
+
+def _write_json_value(path: str, payload):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=4)
+
+
+def _sanitize_upload_stem(filename: str) -> str:
+    base_name = os.path.basename(filename or "").strip()
+    stem, _ = os.path.splitext(base_name)
+    safe_stem = "".join(character if character.isalnum() or character in ("-", "_") else "_" for character in stem)
+    safe_stem = safe_stem.strip("._")
+    return safe_stem or "video"
+
+
+async def _save_upload_to_path(file: UploadFile, destination_path: str) -> None:
+    os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+    with open(destination_path, "wb") as destination_file:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            destination_file.write(chunk)
+
+
+def _normalize_video_with_ffmpeg(input_path: str, output_path: str) -> bool:
+    ffmpeg_executable = shutil.which("ffmpeg")
+    if not ffmpeg_executable:
+        return False
+
+    command = [
+        ffmpeg_executable,
+        "-y",
+        "-i",
+        input_path,
+        "-vf",
+        f"scale={NORMALIZED_VIDEO_SIZE[0]}:{NORMALIZED_VIDEO_SIZE[1]},fps={int(NORMALIZED_VIDEO_FPS)}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-an",
+        output_path,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"[upload_video] ffmpeg normalization failed: {result.stderr.strip() or result.stdout.strip()}")
+        return False
+
+    return True
+
+
+def _normalize_video_with_opencv(input_path: str, output_path: str) -> None:
+    capture = cv2.VideoCapture(input_path)
+    if not capture.isOpened():
+        capture.release()
+        raise HTTPException(status_code=400, detail="Uploaded file could not be opened as a video")
+
+    source_fps = capture.get(cv2.CAP_PROP_FPS)
+    if not source_fps or source_fps <= 0:
+        source_fps = NORMALIZED_VIDEO_FPS
+
+    output_fps = min(source_fps, NORMALIZED_VIDEO_FPS)
+    writer = cv2.VideoWriter(
+        output_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        output_fps,
+        NORMALIZED_VIDEO_SIZE,
+    )
+    if not writer.isOpened():
+        capture.release()
+        writer.release()
+        raise HTTPException(status_code=500, detail="Unable to create normalized video output")
+
+    frame_interval = 1.0 / source_fps
+    next_output_time = 0.0
+    elapsed_time = 0.0
+
+    try:
+        while True:
+            success, frame = capture.read()
+            if not success:
+                break
+
+            if source_fps > NORMALIZED_VIDEO_FPS and elapsed_time + 1e-9 < next_output_time:
+                elapsed_time += frame_interval
+                continue
+
+            resized_frame = cv2.resize(frame, NORMALIZED_VIDEO_SIZE, interpolation=cv2.INTER_AREA)
+            writer.write(resized_frame)
+
+            if source_fps > NORMALIZED_VIDEO_FPS:
+                next_output_time += 1.0 / NORMALIZED_VIDEO_FPS
+
+            elapsed_time += frame_interval
+    finally:
+        capture.release()
+        writer.release()
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise HTTPException(status_code=500, detail="Video normalization did not produce an output file")
+
+
+def _normalize_uploaded_video(input_path: str, output_path: str) -> None:
+    if _normalize_video_with_ffmpeg(input_path, output_path):
+        return
+
+    _normalize_video_with_opencv(input_path, output_path)
+
+
+def _probe_video_metadata(video_source: str):
+    capture_source: Union[str, int] = 0 if video_source == "0" else video_source
+    capture = cv2.VideoCapture(capture_source)
+    if not capture.isOpened():
+        capture.release()
+        raise HTTPException(status_code=400, detail=f"Could not open video source: {video_source}")
+
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+    capture.release()
+
+    return {
+        "source_width": width if width > 0 else None,
+        "source_height": height if height > 0 else None,
+        "source_fps": fps if fps > 0 else None,
+    }
+
 @app.get("/")
 def root():
     return {"message": "EagleEye backend running"}
+
+
+@app.get("/boot_status")
+def boot_status():
+    return _boot_ready_state()
+
+
+@app.get("/monitoring_status")
+def monitoring_status():
+    with runtime_lock:
+        if worker_thread is not None and worker_thread.is_alive() and runtime is not None:
+            return {"state": "running", "active": True, "runtime": get_runtime_status(runtime)}
+        return {"state": "paused", "active": False, "runtime": None}
+
+
+@app.get("/video_source_metadata")
+def video_source_metadata(video_source: str):
+    return _probe_video_metadata(video_source)
 
 
 @app.post("/upload_video")
 async def upload_video(file: UploadFile = File(...)):
     """Upload a video file and return the path for use with start_monitoring."""
     try:
-        # Create uploads directory if it doesn't exist
-        upload_dir = "uploads"
-        os.makedirs(upload_dir, exist_ok=True)
-        
-        # Save the uploaded file
-        file_path = os.path.join(upload_dir, file.filename)
-        with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
-        print(f"[upload_video] File uploaded: {file_path}")
-        return {"status": "success", "file_path": file_path}
+        os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+        filename = file.filename or "uploaded_video.mp4"
+        file_extension = os.path.splitext(filename)[1].lower()
+        content_type = (file.content_type or "").lower()
+        if content_type and not content_type.startswith("video/") and file_extension not in SUPPORTED_VIDEO_EXTENSIONS:
+            raise HTTPException(status_code=400, detail="Only video uploads are supported")
+
+        upload_id = uuid4().hex[:8]
+        safe_stem = _sanitize_upload_stem(filename)
+        raw_extension = file_extension if file_extension else ".bin"
+        raw_upload_path = os.path.join(UPLOADS_DIR, f"{safe_stem}_{upload_id}_source{raw_extension}")
+        normalized_upload_path = os.path.join(UPLOADS_DIR, f"{safe_stem}_{upload_id}_720p30.mp4")
+
+        await _save_upload_to_path(file, raw_upload_path)
+
+        try:
+            _normalize_uploaded_video(raw_upload_path, normalized_upload_path)
+        except Exception:
+            if os.path.exists(normalized_upload_path):
+                os.remove(normalized_upload_path)
+            raise
+        finally:
+            if os.path.exists(raw_upload_path):
+                os.remove(raw_upload_path)
+
+        print(f"[upload_video] File uploaded and normalized: {normalized_upload_path}")
+        return {"status": "success", "file_path": normalized_upload_path}
     except Exception as e:
         print(f"[upload_video] Error uploading file: {e}")
-        return {"status": "error", "message": str(e)}
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/video_feed")
@@ -200,11 +447,42 @@ class GlobalConfigPayload(BaseModel):
 
 @app.post("/global_config")
 def global_config(payload: GlobalConfigPayload):
+    _require_monitoring_paused()
     os.makedirs(os.path.dirname(DEFAULT_GLOBAL_CONFIG), exist_ok=True)
     with open(DEFAULT_GLOBAL_CONFIG, "w") as f:
         json.dump([payload.model_dump()], f, indent=4)
 
     return {"status": "saved", "path": DEFAULT_GLOBAL_CONFIG}
+
+
+@app.get("/global_config")
+def get_global_config():
+    data = _read_json_file(DEFAULT_GLOBAL_CONFIG)
+    if isinstance(data, list) and data:
+        return data[0]
+    if isinstance(data, dict):
+        return data
+    return {"frameSkip": 5, "confidenceThreshold": 0.3}
+
+
+@app.get("/rules")
+def get_rules():
+    data = _read_json_file("config/rules_config.json")
+    return data if isinstance(data, list) else []
+
+
+@app.get("/video_source_config")
+def get_video_source_config():
+    data = _read_json_file(DEFAULT_VIDEO_SOURCE_CONFIG)
+    return data if isinstance(data, dict) else {"video_source": None}
+
+
+@app.post("/video_source_config")
+def set_video_source_config(payload: dict):
+    _require_monitoring_paused()
+    video_source = payload.get("video_source")
+    _write_json_value(DEFAULT_VIDEO_SOURCE_CONFIG, {"video_source": video_source})
+    return {"status": "saved", "video_source": video_source}
 
 @app.post("/zone_config")
 def zone_config():
@@ -313,7 +591,13 @@ def start_monitoring(payload: StartMonitoringPayload):
         stop_event = threading.Event()
         if payload.video_source == "0":
             payload.video_source = 0
-        runtime = EagleEyeRuntime(cap=cv2.VideoCapture(payload.video_source))
+
+        capture = cv2.VideoCapture(payload.video_source)
+        if not capture.isOpened():
+            capture.release()
+            raise HTTPException(status_code=400, detail=f"Could not open video source: {payload.video_source}")
+
+        runtime = EagleEyeRuntime(cap=capture)
         runtime.videoSource = payload.video_source
         _attach_face_to_runtime(runtime)
         runtime.frame_skip = frame_skip
@@ -324,6 +608,8 @@ def start_monitoring(payload: StartMonitoringPayload):
             error_msg = f"Could not initialize video source: {payload.video_source}"
             print(f"[start_monitoring] ERROR: {error_msg}")
             return {"status": "error", "message": error_msg}
+
+        _write_json_value(DEFAULT_VIDEO_SOURCE_CONFIG, {"video_source": payload.video_source})
 
         append_runtime_log(runtime, f"Monitoring started from {payload.video_source}", category="system")
         
@@ -349,6 +635,9 @@ def video_source_info():
                 "status": "not_running",
                 "source_type": "unknown",
                 "direct_video_url": None,
+                "source_width": None,
+                "source_height": None,
+                "source_fps": None,
             }
 
         source = runtime.videoSource
@@ -357,12 +646,18 @@ def video_source_info():
                 "status": "running",
                 "source_type": "camera",
                 "direct_video_url": None,
+                "source_width": runtime.source_width,
+                "source_height": runtime.source_height,
+                "source_fps": runtime.source_fps,
             }
 
         return {
             "status": "running",
             "source_type": "video_file",
             "direct_video_url": "/api/video_file",
+            "source_width": runtime.source_width,
+            "source_height": runtime.source_height,
+            "source_fps": runtime.source_fps,
         }
 
 
@@ -384,6 +679,16 @@ def video_file():
     return FileResponse(path=source_path, media_type=media_type, filename=os.path.basename(source_path))
 
 
+@app.get("/uploads/{filename}")
+def uploaded_media(filename: str):
+        media_path = os.path.join("uploads", os.path.basename(filename))
+        if not os.path.exists(media_path):
+            raise HTTPException(status_code=404, detail=f"Media file not found: {filename}")
+
+        media_type = mimetypes.guess_type(media_path)[0] or "application/octet-stream"
+        return FileResponse(path=media_path, media_type=media_type, filename=os.path.basename(media_path))
+
+
 @app.post("/stop")
 def stop():
     global runtime, worker_thread, stop_event
@@ -401,9 +706,56 @@ def stop():
     return {"status": "stopped"}
 
 
+@app.get("/snapshots")
+def snapshots(limit: int = 200):
+    return get_snapshot_history(limit)
+
+
+@app.post("/clear_logs")
+def clear_logs():
+    _require_monitoring_paused()
+    clear_persisted_event_log_history()
+    return {"status": "logs cleared"}
+
+
+@app.post("/clear_snapshots")
+def clear_snapshots():
+    _require_monitoring_paused()
+    clear_snapshot_records()
+    _clear_directory("uploads")
+    return {"status": "snapshots cleared"}
+
+
+@app.post("/factory_reset")
+def factory_reset():
+    _shutdown_runtime("factory_reset")
+    _write_json_list(DEFAULT_GLOBAL_CONFIG, [])
+    _write_json_list("config/zone_config.json", [])
+    _write_json_list("config/rules_config.json", [])
+    _write_json_value(DEFAULT_VIDEO_SOURCE_CONFIG, {"video_source": None})
+    clear_persisted_event_log_history()
+    clear_snapshot_records()
+    _clear_directory("uploads")
+    _clear_directory("known_people")
+    os.makedirs("uploads", exist_ok=True)
+    os.makedirs("known_people", exist_ok=True)
+    return {"status": "factory reset complete"}
+
+
+@app.post("/clear_config")
+def clear_config():
+    _require_monitoring_paused()
+    _write_json_list(DEFAULT_GLOBAL_CONFIG, [])
+    _write_json_list("config/zone_config.json", [])
+    _write_json_list("config/rules_config.json", [])
+    _write_json_value(DEFAULT_VIDEO_SOURCE_CONFIG, {"video_source": None})
+    return {"status": "configuration cleared"}
+
+
 @app.post("/clear_zones")
 def clear_zones():
     global runtime
+    _require_monitoring_paused()
     config_path = _zone_config_path()
     
     # Clear zones from JSON file
@@ -441,6 +793,7 @@ def get_zones():
 @app.post("/clear_rules")
 def clear_rules():
     global runtime
+    _require_monitoring_paused()
     rules_path = "config/rules_config.json"
     
     # Clear rules from JSON file
@@ -461,6 +814,7 @@ def clear_rules():
     
 @app.post("/save_rules")
 def save_rules(rules: List[RulePayload]):
+    _require_monitoring_paused()
     rules_path = "config/rules_config.json"
     
     # Save rules to JSON file
@@ -522,6 +876,7 @@ if __name__ == "__main__":
 @app.post("/zones")
 def add_zone(payload: ZonePayload):
     global runtime
+    _require_monitoring_paused()
     config_path = _zone_config_path()
 
     # Load existing zones from JSON

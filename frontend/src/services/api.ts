@@ -1,4 +1,13 @@
-import type { RuleConfig, Zone } from "../types/types";
+import type {
+  BootStatus,
+  MonitoringStatus,
+  PersistedRulePayload,
+  RuleConfig,
+  SnapshotRecord,
+  VideoSourceMetadata,
+  VideoSourceConfig,
+  Zone,
+} from "../types/types";
 
 const API_BASE = "/api";
 export const VIDEO_FEED_URL = `${API_BASE}/video_feed`;
@@ -31,6 +40,9 @@ export type VideoSourceInfo = {
   status: "running" | "not_running";
   source_type: "camera" | "video_file" | "unknown";
   direct_video_url: string | null;
+  source_width?: number | null;
+  source_height?: number | null;
+  source_fps?: number | null;
 };
 
 type RulePayload = {
@@ -98,6 +110,51 @@ export async function saveRules(rules: RuleConfig[]): Promise<void> {
   });
   if (!response.ok) {
     await throwWithResponse("Failed to save rules", response);
+  }
+}
+
+export async function listRules(): Promise<RuleConfig[]> {
+  const response = await fetch(`${API_BASE}/rules`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to list rules", response);
+  }
+
+  const rules = (await response.json()) as PersistedRulePayload[];
+  return rules.map((rule) => ({
+    id: rule.rule_id,
+    name: rule.name,
+    when: rule.conditions.when,
+    actions: rule.conditions.actions ?? [],
+  }));
+}
+
+// Backwards-compatible alias: some files import `getRules`
+export const getRules = listRules;
+
+export async function getGlobalConfig(): Promise<GlobalConfig> {
+  const response = await fetch(`${API_BASE}/global_config`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to load global config", response);
+  }
+  return (await response.json()) as GlobalConfig;
+}
+
+export async function getVideoSourceConfig(): Promise<VideoSourceConfig> {
+  const response = await fetch(`${API_BASE}/video_source_config`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to load video source config", response);
+  }
+  return (await response.json()) as VideoSourceConfig;
+}
+
+export async function setVideoSourceConfig(videoSource: string | null): Promise<void> {
+  const response = await fetch(`${API_BASE}/video_source_config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video_source: videoSource }),
+  });
+  if (!response.ok) {
+    await throwWithResponse("Failed to save video source config", response);
   }
 }
 
@@ -217,6 +274,58 @@ export async function stopMonitoring(): Promise<void> {
   }
 }
 
+export async function getBootStatus(): Promise<BootStatus> {
+  const response = await fetch(`${API_BASE}/boot_status`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to load boot status", response);
+  }
+  return (await response.json()) as BootStatus;
+}
+
+export async function getMonitoringStatus(): Promise<MonitoringStatus> {
+  const response = await fetch(`${API_BASE}/monitoring_status`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to load monitoring status", response);
+  }
+  return (await response.json()) as MonitoringStatus;
+}
+
+export async function getSnapshots(limit = 200): Promise<SnapshotRecord[]> {
+  const response = await fetch(`${API_BASE}/snapshots?limit=${encodeURIComponent(String(limit))}`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to load snapshots", response);
+  }
+  return (await response.json()) as SnapshotRecord[];
+}
+
+export async function clearLogs(): Promise<void> {
+  const response = await fetch(`${API_BASE}/clear_logs`, { method: "POST" });
+  if (!response.ok) {
+    await throwWithResponse("Failed to clear logs", response);
+  }
+}
+
+export async function clearConfig(): Promise<void> {
+  const response = await fetch(`${API_BASE}/clear_config`, { method: "POST" });
+  if (!response.ok) {
+    await throwWithResponse("Failed to clear configuration", response);
+  }
+}
+
+export async function clearSnapshots(): Promise<void> {
+  const response = await fetch(`${API_BASE}/clear_snapshots`, { method: "POST" });
+  if (!response.ok) {
+    await throwWithResponse("Failed to clear snapshots", response);
+  }
+}
+
+export async function factoryReset(): Promise<void> {
+  const response = await fetch(`${API_BASE}/factory_reset`, { method: "POST" });
+  if (!response.ok) {
+    await throwWithResponse("Failed to factory reset", response);
+  }
+}
+
 export async function getEventLog(limit = 200): Promise<EventLogEntry[]> {
   const response = await fetch(`${API_BASE}/event_log?limit=${encodeURIComponent(String(limit))}`);
   if (!response.ok) {
@@ -231,4 +340,12 @@ export async function getVideoSourceInfo(): Promise<VideoSourceInfo> {
     await throwWithResponse("Failed to load video source info", response);
   }
   return (await response.json()) as VideoSourceInfo;
+}
+
+export async function getVideoSourceMetadata(videoSource: string): Promise<VideoSourceMetadata> {
+  const response = await fetch(`${API_BASE}/video_source_metadata?video_source=${encodeURIComponent(videoSource)}`);
+  if (!response.ok) {
+    await throwWithResponse("Failed to load video source metadata", response);
+  }
+  return (await response.json()) as VideoSourceMetadata;
 }
