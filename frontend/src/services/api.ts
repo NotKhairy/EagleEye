@@ -26,6 +26,7 @@ async function throwWithResponse(prefix: string, response: Response): Promise<ne
 export type GlobalConfig = {
   frameSkip: number;
   confidenceThreshold: number;
+  recipientEmail?: string;
 };
 
 export type EventLogEntry = {

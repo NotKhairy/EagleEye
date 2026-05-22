@@ -38,6 +38,7 @@ export default function ConfigurationPage({
   const [loadedRules, setLoadedRules] = useState<RuleConfig[]>([]);
   const [initialFrameSkip, setInitialFrameSkip] = useState(2);
   const [initialConfidenceThreshold, setInitialConfidenceThreshold] = useState(0.5);
+  const [initialRecipientEmail, setInitialRecipientEmail] = useState<string | null>(null);
   const [isMonitoringActive, setIsMonitoringActive] = useState(false);
 
   const revokeUploadedVideoUrl = () => {
@@ -96,6 +97,7 @@ export default function ConfigurationPage({
         setLoadedRules(savedRules);
         setInitialFrameSkip(savedConfig.frameSkip);
         setInitialConfidenceThreshold(savedConfig.confidenceThreshold);
+        setInitialRecipientEmail(savedConfig.recipientEmail ?? null);
         setIsMonitoringActive(monitoringStatus.active);
 
         if (monitoringStatus.active && monitoringStatus.runtime) {
@@ -441,6 +443,7 @@ export default function ConfigurationPage({
         sourceError={sourceError}
         initialFrameSkip={initialFrameSkip}
         initialConfidenceThreshold={initialConfidenceThreshold}
+        initialRecipientEmail={initialRecipientEmail ?? undefined}
         editable={editable}
         submitLabel={isSettingsMode ? "RESUME MONITORING" : "START MONITORING"}
         onActivateLiveFeed={handleActivateLiveFeed}

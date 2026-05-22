@@ -508,11 +508,20 @@ class ObjectDetector:
             self._handle_desktop_push(rule_event, detection)
 
         if "email" in actions:
-            recipient = "khaledkherallah204@gmail.com"
+            # Prefer configured recipientEmail from global config, fall back to existing hardcoded address
+            recipient = None
+            try:
+                recipient = (self.global_config or {}).get("recipientEmail")
+            except Exception:
+                recipient = None
+
+            if not recipient:
+                recipient = "khaledkherallah204@gmail.com"
+
             if recipient:
                 self._handle_email(rule_event, detection, recipient, snapshot)
             else:
-                print(f"[WARN] Rule '{rule_event.get('rule_name')}' requested email but no emailDigest configured")
+                print(f"[WARN] Rule '{rule_event.get('rule_name')}' requested email but no recipient configured")
 
     
     def execute_trigger_events(self, trigger_events, snapshot_path=None):
@@ -560,7 +569,7 @@ class ObjectDetector:
         y = (box[1] + box[3]) / 2
         return (x, y)
     
-    def draw_tracks(self, frame, tracked_objects, font_scale=0.4, line_width=1):
+    def draw_tracks(self, frame, tracked_objects, font_scale=0.48, line_width=1):
         """Draw tracked objects (bbox + label + track id + confidence)."""
         annotated = frame.copy()
         height, width = annotated.shape[:2]
@@ -583,16 +592,26 @@ class ObjectDetector:
                 cv2.FONT_HERSHEY_SIMPLEX,
                 font_scale,
                 (0, 255, 0),
-                line_width,
+                1,
                 cv2.LINE_AA,
             )
         return annotated
 
-    def draw_alert_snapshot(self, frame, tracked_objects, zone_manager, highlighted_zone_ids=None, font_scale=0.45, line_width=2):
+    def draw_alert_snapshot(
+        self,
+        frame,
+        tracked_objects,
+        zone_manager,
+        highlighted_zone_ids=None,
+        highlighted_track_ids=None,
+        font_scale=0.54,
+        line_width=2,
+    ):
         """Draw an alert snapshot with tracked objects and highlighted zones only."""
         annotated = frame.copy()
         height, width = annotated.shape[:2]
         highlighted = {str(zone_id) for zone_id in (highlighted_zone_ids or [])}
+        highlighted_tracks = {str(track_id) for track_id in (highlighted_track_ids or [])}
 
         for zone in zone_manager.zones:
             coordinates = zone.get("coordinates") or []
@@ -639,7 +658,9 @@ class ObjectDetector:
             if x2 <= x1 or y2 <= y1:
                 continue
             label_text = f"{obj['label']} {obj['track_id']} {obj['confidence']:.2f}"
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), line_width)
+            is_highlighted_track = str(obj.get("track_id")) in highlighted_tracks
+            box_color = (0, 0, 255) if is_highlighted_track else (0, 255, 0)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, line_width)
             text_origin = (x1, max(18, y1 - 8))
             cv2.putText(
                 annotated,
@@ -647,8 +668,8 @@ class ObjectDetector:
                 text_origin,
                 cv2.FONT_HERSHEY_SIMPLEX,
                 font_scale,
-                (0, 255, 0),
-                line_width,
+                box_color,
+                1,
                 cv2.LINE_AA,
             )
 

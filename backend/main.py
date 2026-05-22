@@ -212,11 +212,18 @@ def _detector_worker_loop(runtime):
                     for event in trigger_events
                     for zone_id in (event.get("zone_ids") or [])
                 })
+                highlighted_track_ids = sorted({
+                    str(obj.get("track_id"))
+                    for event in trigger_events
+                    for obj in (event.get("matched_objects") or [])
+                    if obj.get("track_id") is not None
+                })
                 alert_frame = runtime.detector.draw_alert_snapshot(
                     frame,
                     tracked_objects,
                     runtime.zone_manager,
                     highlighted_zone_ids=highlighted_zone_ids,
+                    highlighted_track_ids=highlighted_track_ids,
                     font_scale=0.45,
                     line_width=2,
                 )

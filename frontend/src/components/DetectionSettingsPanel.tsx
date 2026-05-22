@@ -20,6 +20,7 @@ type DetectionSettingsPanelProps = {
   sourceError: string | null;
   initialFrameSkip?: number;
   initialConfidenceThreshold?: number;
+  initialRecipientEmail?: string | null;
   editable?: boolean;
   submitLabel?: string;
   onActivateLiveFeed: () => void;
@@ -41,6 +42,7 @@ export default function DetectionSettingsPanel({
   initialRules = [],
   initialFrameSkip = 2,
   initialConfidenceThreshold = 0.5,
+  initialRecipientEmail,
   editable = true,
   submitLabel = "START MONITORING",
   onActivateLiveFeed,
@@ -55,6 +57,7 @@ export default function DetectionSettingsPanel({
   const ruleBuilderRef = useRef<RuleBuilderPanelHandle | null>(null);
   const [frameSkip, setFrameSkip] = useState(initialFrameSkip);
   const [confidenceThreshold, setConfidenceThreshold] = useState(initialConfidenceThreshold);
+  const [recipientEmail, setRecipientEmail] = useState<string | null | undefined>(initialRecipientEmail);
 
   useEffect(() => {
     setFrameSkip(initialFrameSkip);
@@ -63,6 +66,10 @@ export default function DetectionSettingsPanel({
   useEffect(() => {
     setConfidenceThreshold(initialConfidenceThreshold);
   }, [initialConfidenceThreshold]);
+
+  useEffect(() => {
+    setRecipientEmail(initialRecipientEmail);
+  }, [initialRecipientEmail]);
 
   const handleStartMonitoring = async () => {
     // Validate constraints
@@ -87,7 +94,8 @@ export default function DetectionSettingsPanel({
 
     const globalConfig: GlobalConfig = {
       frameSkip,
-      confidenceThreshold
+      confidenceThreshold,
+      recipientEmail: recipientEmail ?? undefined,
     };
 
     await onStartMonitoring(globalConfig, videoSource, rules);
@@ -231,6 +239,23 @@ export default function DetectionSettingsPanel({
               setConfidenceThreshold(Number(event.target.value))
             }
           />
+        </div>
+
+        <div>
+          <label className="text-xs text-gray-400" htmlFor="recipientEmail">
+            Destination Email
+          </label>
+          <input
+            id="recipientEmail"
+            type="email"
+            placeholder="recipient@example.com"
+            className="w-full mt-1.5 bg-black border border-gray-700 rounded p-2 text-sm"
+            value={recipientEmail ?? ""}
+            onChange={(e) => setRecipientEmail(e.target.value)}
+          />
+          <p className="text-[11px] leading-4 text-gray-500">
+            Email address to receive alert notifications.
+          </p>
         </div>
       </div>
 

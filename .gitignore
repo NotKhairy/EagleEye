@@ -42,3 +42,5 @@ Thumbs.db
 /videos/
 /backend/uploads/
 /backend/config/
+/backend/data/
+/backend/known_people/

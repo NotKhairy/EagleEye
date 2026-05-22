@@ -442,6 +442,7 @@ def event_log(limit: int = 200):
 class GlobalConfigPayload(BaseModel):
     frameSkip: int
     confidenceThreshold: float
+    recipientEmail: Optional[str] = None
 
 
 
@@ -462,7 +463,7 @@ def get_global_config():
         return data[0]
     if isinstance(data, dict):
         return data
-    return {"frameSkip": 5, "confidenceThreshold": 0.3}
+    return {"frameSkip": 5, "confidenceThreshold": 0.3, "recipientEmail": ""}
 
 
 @app.get("/rules")
