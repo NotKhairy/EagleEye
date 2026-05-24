@@ -1,16 +1,12 @@
 ultralytics
 opencv-python
 numpy
-matplotlib
 deep-sort-realtime
 torch
-torchvision
-torchaudio
 fastapi
 uvicorn
 pydantic
 python-multipart
 facenet-pytorch
-Pillow
 plyer
 python-dotenv
